@@ -1,0 +1,346 @@
+'use client';
+
+import { useState, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
+import Header from '@/app/components/dashboard/Header';
+import EventHeader from '@/app/components/event-details/EventHeader';
+import EventSummary from '@/app/components/event-details/EventSummary';
+import StaffingOverview from '@/app/components/event-details/StaffingOverview';
+import RequirementBoard from '@/app/components/event-details/RequirementBoard';
+import StaffAssignmentDrawer from '@/app/components/event-details/StaffAssignmentDrawer';
+import MissingStaffPanel from '@/app/components/event-details/MissingStaffPanel';
+import EventDetailActions from '@/app/components/event-details/EventDetailActions';
+import StaffingScore from '@/app/components/event-details/StaffingScore';
+import { useEventDetail, useGenerateStaffRecommendations, useGenerateTransportRecommendation, useUpdateEventStatus, useAwardCompletionPoints, useAwardPerformancePoints } from '@/app/lib/hooks';
+import { StaffAssignment, ASSIGNMENT_STATUSES, Event as AppEvent, EventDetailData } from '@/app/components/dashboard/types';
+import { StaffRecommendationResponse, TransportRecommendationResponse } from '@/app/lib/api';
+import StaffRecommendationPanel from '@/app/components/event-details/StaffRecommendationPanel';
+import TransportRecommendationPanel from '@/app/components/event-details/TransportRecommendationPanel';
+import UrgentStaffingPanel from '@/app/components/event-details/UrgentStaffingPanel';
+import GamificationPanel from '@/app/components/event-details/GamificationPanel';
+import StaffManagementPanel from '@/app/components/event-details/StaffManagementPanel';
+import ConfirmEventStatusDialog from '@/app/components/event-details/ConfirmEventStatusDialog';
+import { Spinner } from '@/app/lib/loading';
+import { useAnnouncer } from '@/app/components/ui/Announcer';
+
+type LoadingState = 'loading' | 'error' | 'success' | 'not_found';
+
+export default function EventDetailPage() {
+  const params = useParams();
+  const eventId = params.eventId as string;
+  const { announceSuccess, announceError } = useAnnouncer();
+
+  const [selectedAssignment, setSelectedAssignment] = useState<StaffAssignment | null>(null);
+  const [statusDialog, setStatusDialog] = useState<{ open: boolean; title: string; description: string; confirmLabel: string; status: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const { data, isLoading, error, refetch } = useEventDetail(eventId);
+  const generateStaffMutation = useGenerateStaffRecommendations();
+  const generateTransportMutation = useGenerateTransportRecommendation();
+  const updateStatusMutation = useUpdateEventStatus();
+  const awardCompletionMutation = useAwardCompletionPoints();
+  const awardPerformanceMutation = useAwardPerformancePoints();
+
+  const [recommendations, setRecommendations] = useState<StaffRecommendationResponse | null>(null);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
+  const [transportRecommendation, setTransportRecommendation] = useState<TransportRecommendationResponse | null>(null);
+  const [transportError, setTransportError] = useState<string | null>(null);
+
+  const transportConfirmed = data?.transport && data.transport.total_groups > 0;
+
+  const handleGenerateTeam = async () => {
+    setRecommendationError(null);
+    try {
+      const result = await generateStaffMutation.mutateAsync(eventId);
+      setRecommendations(result);
+      announceSuccess('Équipe générée avec succès.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Impossible de générer les recommandations.';
+      setRecommendationError(message);
+      setRecommendations(null);
+      announceError('Opération impossible. Veuillez réessayer.');
+    }
+  };
+
+  const handleRecommendTransport = async () => {
+    setTransportError(null);
+    try {
+      const result = await generateTransportMutation.mutateAsync(eventId);
+      setTransportRecommendation(result);
+      announceSuccess('Transport recommandé avec succès.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Impossible de générer la recommandation de transport.';
+      setTransportError(message);
+      setTransportRecommendation(null);
+      announceError('Opération impossible. Veuillez réessayer.');
+    }
+  };
+
+  const handleStatusChange = async (newStatus: string) => {
+    setStatusMessage(null);
+    try {
+      await updateStatusMutation.mutateAsync({ eventId, payload: { status: newStatus } });
+      setStatusMessage(`Statut mis à jour: ${newStatus}`);
+      announceSuccess(`Événement ${newStatus.toLowerCase()} avec succès.`);
+      await refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Impossible de mettre à jour le statut.';
+      setStatusMessage(message);
+      announceError('Opération impossible. Veuillez réessayer.');
+    }
+  };
+
+  const handleStatusDialog = (title: string, description: string, confirmLabel: string, status: string) => {
+    setStatusDialog({ open: true, title, description, confirmLabel, status });
+  };
+
+  const handleStatusDialogClose = () => {
+    setStatusDialog(null);
+  };
+
+  const handleStatusDialogConfirm = async () => {
+    if (statusDialog) {
+      await handleStatusChange(statusDialog.status);
+      handleStatusDialogClose();
+    }
+  };
+
+  const handleAwardCompletion = async () => {
+    try {
+      await awardCompletionMutation.mutateAsync(eventId);
+      await refetch();
+      announceSuccess('Points de présence attribués avec succès.');
+    } catch {
+      announceError('Opération impossible. Veuillez réessayer.');
+    }
+  };
+
+  const handleAwardPerformance = async () => {
+    try {
+      await awardPerformanceMutation.mutateAsync(eventId);
+      await refetch();
+      announceSuccess('Points de performance attribués avec succès.');
+    } catch {
+      announceError('Opération impossible. Veuillez réessayer.');
+    }
+  };
+
+  if (isLoading) {
+    return <PageLoading message="Chargement de l'événement..." />;
+  }
+
+  if (error || !data) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Événement" />
+        <main className="p-8">
+          <div className="max-w-7xl mx-auto">
+            <div className="bg-white rounded-xl border border-gray-200 p-12 text-center shadow-sm">
+              <p className="text-gray-500 text-sm mb-4">{error?.message || 'Événement introuvable'}</p>
+              <button
+                onClick={() => refetch()}
+                className="inline-flex items-center px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors"
+              >
+                Réessayer
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const { event, staffing, assignments, requirements_detail } = data;
+
+  const eventWithRequirements = {
+    ...event,
+    requirements: requirements_detail.map((r: { role_name: string; quantity: number; required_gender: string | null; minimum_experience: number; minimum_skill_level: number; selected: number; missing: number }) => ({
+      role_name: r.role_name,
+      quantity: r.quantity,
+      required_gender: r.required_gender,
+      minimum_experience: r.minimum_experience,
+      minimum_skill_level: r.minimum_skill_level,
+      accepted: r.selected,
+      remaining: r.missing,
+    })),
+  } as AppEvent;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Header title="Événement" />
+      <main className="p-8">
+        <div className="max-w-7xl mx-auto">
+          <EventHeader event={eventWithRequirements} />
+
+          <nav className="flex items-center gap-1 mb-6 bg-white rounded-xl border border-gray-200 p-1 shadow-sm" aria-label="Sous-pages de l'événement">
+            <Link
+              href={`/dashboard/events/${eventId}/attendance`}
+              className="flex-1 text-center px-4 py-2 text-sm font-medium rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Présences
+            </Link>
+            <Link
+              href={`/dashboard/events/${eventId}/evaluations`}
+              className="flex-1 text-center px-4 py-2 text-sm font-medium rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Évaluations
+            </Link>
+            <Link
+              href={`/dashboard/events/${eventId}/operations`}
+              className="flex-1 text-center px-4 py-2 text-sm font-medium rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Opérations
+            </Link>
+            <Link
+              href={`/dashboard/events/${eventId}/report`}
+              className="flex-1 text-center px-4 py-2 text-sm font-medium rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Rapport
+            </Link>
+          </nav>
+
+          {statusMessage && (
+            <div className="mb-6 bg-green-50 border border-green-200 rounded-xl p-4 text-sm text-green-700">
+              {statusMessage}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
+              <EventSummary event={eventWithRequirements} staffing={staffing} />
+              <StaffingOverview staffing={staffing} />
+              <MissingStaffPanel requirements={requirements_detail} />
+
+              <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions rapides</h3>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={handleGenerateTeam}
+                    disabled={generateStaffMutation.isPending}
+                    className="inline-flex items-center px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {generateStaffMutation.isPending && <Spinner size="sm" className="mr-2 text-white" />}
+                    Générer l'équipe
+                  </button>
+                  <button
+                    onClick={handleRecommendTransport}
+                    disabled={generateTransportMutation.isPending}
+                    className="inline-flex items-center px-4 py-2 border border-[#D4AF37] text-[#D4AF37] text-sm font-medium rounded-lg hover:bg-[#D4AF37]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {generateTransportMutation.isPending && <Spinner size="sm" className="mr-2" />}
+                    Recommander le transport
+                  </button>
+                  {event.status === 'COMPLETED' && (
+                    <>
+                      <button
+                        onClick={handleAwardCompletion}
+                        disabled={awardCompletionMutation.isPending}
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {awardCompletionMutation.isPending && <Spinner size="sm" className="mr-2" />}
+                        Attribuer points de présence
+                      </button>
+                      <button
+                        onClick={handleAwardPerformance}
+                        disabled={awardPerformanceMutation.isPending}
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {awardPerformanceMutation.isPending && <Spinner size="sm" className="mr-2" />}
+                        Attribuer points de performance
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <StaffRecommendationPanel
+                recommendations={recommendations}
+                loading={generateStaffMutation.isPending}
+                error={recommendationError}
+                onRetry={handleGenerateTeam}
+                eventId={eventId}
+                onConfirmed={async () => { await refetch(); setRecommendations(null); }}
+              />
+
+              <TransportRecommendationPanel
+                recommendation={transportRecommendation}
+                loading={generateTransportMutation.isPending}
+                error={transportError}
+                onRetry={handleRecommendTransport}
+                eventId={eventId}
+                onConfirmed={async () => { await refetch(); setTransportRecommendation(null); }}
+              />
+
+              <UrgentStaffingPanel eventId={eventId} eventUrgent={event.urgent} />
+
+              <GamificationPanel />
+            </div>
+
+            <div className="space-y-6">
+              <EventDetailActions
+                onGenerateTeam={handleGenerateTeam}
+                onRecommendTransport={handleRecommendTransport}
+                onLaunchUrgentOffers={() => {}}
+                onViewStaffing={() => {}}
+                onAwardCompletion={handleAwardCompletion}
+                onAwardPerformance={handleAwardPerformance}
+                onPlanEvent={() => handleStatusDialog('Planifier', 'Confirmer la planification de cet événement?', 'Planifier', 'PLANNED')}
+                onConfirmEvent={() => handleStatusDialog('Confirmer', 'Confirmer cet événement?', 'Confirmer', 'CONFIRMED')}
+                onStartEvent={() => handleStatusDialog('Démarrer', 'Démarrer cet événement?', 'Démarrer', 'IN_PROGRESS')}
+                onCompleteEvent={() => handleStatusDialog('Terminer', 'Marquer cet événement comme terminé?', 'Terminer', 'COMPLETED')}
+                onCancelEvent={() => handleStatusDialog('Annuler', 'Annuler cet événement?', 'Annuler', 'CANCELLED')}
+                isUrgent={event.urgent}
+                eventStatus={event.status}
+                generatingTeam={generateStaffMutation.isPending}
+                generatingTransport={generateTransportMutation.isPending}
+                transportConfirmed={transportConfirmed}
+                awardingCompletion={awardCompletionMutation.isPending}
+                awardingPerformance={awardPerformanceMutation.isPending}
+                statusLoading={updateStatusMutation.isPending}
+              />
+              <StaffingScore assignments={assignments} />
+              <RequirementBoard requirements={requirements_detail} eventId={eventId} onRefresh={refetch} />
+              <StaffManagementPanel
+                assignments={assignments}
+                eventId={eventId}
+                requirements={requirements_detail}
+                onRefresh={refetch}
+              />
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {selectedAssignment && (
+        <StaffAssignmentDrawer
+          assignment={selectedAssignment}
+          onClose={() => setSelectedAssignment(null)}
+        />
+      )}
+
+      {statusDialog?.open && (
+        <ConfirmEventStatusDialog
+          open={statusDialog.open}
+          title={statusDialog.title}
+          description={statusDialog.description}
+          confirmLabel={statusDialog.confirmLabel}
+          onConfirm={handleStatusDialogConfirm}
+          onClose={handleStatusDialogClose}
+          loading={updateStatusMutation.isPending}
+        />
+      )}
+    </div>
+  );
+}
+
+function PageLoading({ message }: { message: string }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <Spinner size="lg" className="mx-auto mb-4 text-[#D4AF37]" />
+        <p className="text-gray-500 text-sm">{message}</p>
+      </div>
+    </div>
+  );
+}

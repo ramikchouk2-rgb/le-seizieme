@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: le-seizieme-frontend
+    env: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_API_TIMEOUT_MS
+        value: "15000"

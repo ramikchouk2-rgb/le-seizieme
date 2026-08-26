@@ -1,0 +1,17 @@
+[Unit]
+Description=Le Seizième Frontend (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{GROUP}}
+WorkingDirectory={{PROJECT_ROOT}}/frontend
+EnvironmentFile={{PROJECT_ROOT}}/frontend/.env.local
+Environment=PATH={{PROJECT_ROOT}}/frontend/node_modules/.bin
+ExecStart={{PROJECT_ROOT}}/frontend/node_modules/.bin/next start --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
