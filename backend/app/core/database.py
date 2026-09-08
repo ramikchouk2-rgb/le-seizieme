@@ -4,7 +4,7 @@ import re
 import ssl
 from typing import Any
 import asyncpg
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import urlparse
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,30 +21,7 @@ def _normalize_database_url(url: str) -> str:
                 return match.group(0)
             return inner
 
-        cleaned = re.sub(r'\[([^\[\]]+)\]', strip_non_ipv6_brackets, url)
-        if cleaned == url:
-            return url
-        parsed = urlparse(cleaned)
-        hostname = parsed.hostname or ""
-        if not hostname:
-            return url
-        is_ipv6 = ":" in hostname
-        if parsed.port:
-            if is_ipv6:
-                normalized_host = f"[{hostname}]:{parsed.port}"
-            else:
-                normalized_host = f"{hostname}:{parsed.port}"
-        else:
-            if is_ipv6:
-                normalized_host = f"[{hostname}]"
-            else:
-                normalized_host = hostname
-        if parsed.username:
-            auth = parsed.username
-            if parsed.password:
-                auth += f":{parsed.password}"
-            return urlunparse(parsed._replace(netloc=f"{auth}@{normalized_host}"))
-        return urlunparse(parsed._replace(netloc=normalized_host))
+        return re.sub(r'\[([^\[\]]+)\]', strip_non_ipv6_brackets, url)
     except Exception:
         return url
 
@@ -64,6 +41,17 @@ async def get_pool() -> asyncpg.Pool:
                 pass
         settings.validate_production()
         database_url = _normalize_database_url(settings.DATABASE_URL)
+        try:
+            parsed = urlparse(database_url)
+            logger.info(
+                "DATABASE connection target: host=%s port=%s database=%s user=%s",
+                parsed.hostname,
+                parsed.port,
+                parsed.path.lstrip('/'),
+                parsed.username,
+            )
+        except Exception:
+            pass
         connect_kwargs: dict[str, Any] = {"min_size": 1, "max_size": 10}
         if settings.APP_ENV == "production":
             ssl_context = ssl.create_default_context()
