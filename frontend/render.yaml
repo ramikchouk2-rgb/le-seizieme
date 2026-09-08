@@ -8,5 +8,7 @@ services:
     startCommand: npm start
     healthCheckPath: /
     envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://le-seizieme.onrender.com/api
       - key: NEXT_PUBLIC_API_TIMEOUT_MS
         value: "15000"

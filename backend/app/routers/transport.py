@@ -6,6 +6,8 @@ from app.core.deps import require_manager_or_admin
 from app.models.transport_assignment import (
     TransportConfirmationRequest,
     TransportConfirmationResponse,
+    TransportDriverResponse,
+    TransportPassengerResponse,
     TransportRecommendationResponse,
     TransportUnassignedPassengerResponse,
 )
