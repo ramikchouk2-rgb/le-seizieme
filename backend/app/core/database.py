@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import ssl
 from typing import Any
 import asyncpg
 from urllib.parse import quote, urlparse, urlunparse
@@ -65,7 +66,10 @@ async def get_pool() -> asyncpg.Pool:
         database_url = _normalize_database_url(settings.DATABASE_URL)
         connect_kwargs: dict[str, Any] = {"min_size": 1, "max_size": 10}
         if settings.APP_ENV == "production":
-            connect_kwargs["ssl"] = True
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            connect_kwargs["ssl"] = ssl_context
         try:
             _pool = await asyncpg.create_pool(
                 database_url,
