@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.database import get_pool
+from app.utils.datetime_utils import now_naive_utc
 
 
 SORT_WHITELIST = {
@@ -22,7 +23,7 @@ SORT_WHITELIST = {
 
 
 async def _get_current_month_year() -> tuple[int, int]:
-    now = datetime.now(timezone.utc)
+    now = now_naive_utc()
     return now.year, now.month
 
 

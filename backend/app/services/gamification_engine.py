@@ -3,6 +3,7 @@ from datetime import datetime, date, timezone
 from typing import Any
 
 from app.core.database import get_pool
+from app.utils.datetime_utils import now_naive_utc
 from app.utils.event_utils import load_event
 
 POINTS_EVENT_COMPLETION_BASE = 50
@@ -429,7 +430,7 @@ async def get_server_points(server_id: str) -> dict[str, Any]:
         if not server:
             return {"error": "Server not found", "status": "ERROR"}
 
-        now = datetime.now(timezone.utc)
+        now = now_naive_utc()
         current_month = now.month
         current_year = now.year
         if current_month == 1:

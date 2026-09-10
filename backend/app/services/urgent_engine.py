@@ -4,6 +4,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.database import get_pool
+from app.utils.datetime_utils import now_naive_utc
 from app.services.selection_engine import (
     generate_staff_recommendations,
     haversine_km,
@@ -178,7 +179,7 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
             for sel in selected:
                 sid = sel["server_id"]
                 excluded_servers.add(sid)
-                deadline = datetime.now(timezone.utc) + timedelta(minutes=URGENT_OFFER_EXPIRATION_MINUTES)
+                deadline = now_naive_utc() + timedelta(minutes=URGENT_OFFER_EXPIRATION_MINUTES)
                 row = await conn.fetchrow(
                     """
                     INSERT INTO urgent_event_offers (event_id, server_id, wave_number, response_deadline, status)

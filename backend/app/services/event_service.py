@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.core.database import get_pool
+from app.utils.datetime_utils import now_naive_utc
 from app.utils.selection_utils import compute_candidate_score
 from app.services.selection_engine import haversine_km, normalize_text, serialize_row
 
@@ -904,7 +905,7 @@ async def load_event_list(
             idx += 1
 
         if date_range:
-            now = datetime.now(timezone.utc)
+            now = now_naive_utc()
             if date_range == "UPCOMING":
                 where_clauses.append(f"e.start_datetime > ${idx}")
                 params.append(now)
@@ -1013,7 +1014,7 @@ async def load_event_list(
 async def load_event_stats() -> dict[str, int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = now_naive_utc()
 
         upcoming_row = await conn.fetchrow(
             """
