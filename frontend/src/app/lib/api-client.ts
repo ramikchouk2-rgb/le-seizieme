@@ -2,10 +2,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001/a
 
 function getApiTimeout(): number {
   const raw = process.env.NEXT_PUBLIC_API_TIMEOUT_MS;
-  if (!raw) return 15000;
+  if (!raw) return 60000;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 15000;
-  return Math.min(parsed, 120000);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 60000;
+  return Math.min(parsed, 300000);
 }
 
 const DEFAULT_TIMEOUT = getApiTimeout();
@@ -88,6 +88,10 @@ async function fetchAPI<T>(endpoint: string, options: RequestOptions = {}): Prom
   const isMutation = ['POST', 'PATCH', 'DELETE', 'PUT'].includes((fetchOptions.method || 'GET').toUpperCase());
   const maxRetries = isMutation ? 0 : retries;
 
+  if (typeof window !== 'undefined') {
+    console.debug('[API]', fetchOptions.method || 'GET', url, 'timeout:', timeout);
+  }
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -137,6 +141,10 @@ async function fetchAPI<T>(endpoint: string, options: RequestOptions = {}): Prom
       return response.json();
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (typeof window !== 'undefined') {
+        console.error('[API ERROR]', fetchOptions.method || 'GET', url, error);
+      }
 
       if (error instanceof ApiError && error.status !== 0 && error.status !== 408 && error.status < 500) {
         throw lastError;
