@@ -52,7 +52,7 @@ async def get_pool() -> asyncpg.Pool:
             )
         except Exception:
             pass
-        connect_kwargs: dict[str, Any] = {"min_size": 1, "max_size": 10}
+        connect_kwargs: dict[str, Any] = {"min_size": 1, "max_size": 10, "statement_cache_size": 0}
         if settings.APP_ENV == "production":
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
