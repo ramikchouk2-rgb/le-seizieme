@@ -167,6 +167,9 @@ export default function EventDetailPage() {
     })),
   } as AppEvent;
 
+  // Count confirmed staff (assignments with CONFIRMED status)
+  const confirmedStaffCount = assignments?.filter(a => a.status === 'CONFIRMED').length ?? 0;
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="Événement" />
@@ -255,6 +258,49 @@ export default function EventDetailPage() {
                 </div>
               </div>
 
+              {/* Workflow Progression */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm mb-4">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold ${
+                      confirmedStaffCount > 0 ? 'bg-green-500' : 'bg-gray-300'
+                    }`}>
+                      {confirmedStaffCount > 0 ? '✓' : '1'}
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">Staffing</span>
+                    {confirmedStaffCount > 0 && (
+                      <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                        {confirmedStaffCount} confirmé{confirmedStaffCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex-1 h-0.5 bg-gray-200" />
+                  <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold ${
+                      transportConfirmed ? 'bg-green-500' : (transportRecommendation ? 'bg-[#D4AF37]' : 'bg-gray-300')
+                    }`}>
+                      {transportConfirmed ? '✓' : (transportRecommendation ? '2' : '2')}
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">Transport</span>
+                    {transportConfirmed && (
+                      <span className="text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                        Confirmé
+                      </span>
+                    )}
+                    {transportRecommendation && !transportConfirmed && (
+                      <span className="text-xs text-[#D4AF37] bg-[#D4AF37]/10 px-2 py-0.5 rounded-full">
+                        Recommandé
+                      </span>
+                    )}
+                    {confirmedStaffCount === 0 && !transportRecommendation && (
+                      <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                        En attente
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <StaffRecommendationPanel
                 recommendations={recommendations}
                 loading={generateStaffMutation.isPending}
@@ -271,7 +317,76 @@ export default function EventDetailPage() {
                 onRetry={handleRecommendTransport}
                 eventId={eventId}
                 onConfirmed={async () => { await refetch(); setTransportRecommendation(null); }}
+                confirmedStaffCount={confirmedStaffCount}
               />
+              
+              {/* Confirmed Transport Plan Display */}
+              {transportConfirmed && data?.transport?.groups && data.transport.groups.length > 0 && (
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Plan de transport confirmé
+                  </h3>
+                  <p className="text-sm text-gray-500 mb-4">
+                    {data.transport.total_groups} véhicule{data.transport.total_groups !== 1 ? 's' : ''} • 
+                    {data.transport.total_passengers} passager{data.transport.total_passengers !== 1 ? 's' : ''} transporté{data.transport.total_passengers !== 1 ? 's' : ''}
+                  </p>
+                  <div className="space-y-4">
+                    {data.transport.groups.map((group: any, index: number) => (
+                      <div key={group.group_id} className="border border-gray-100 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-sm font-semibold text-gray-900">Véhicule {index + 1}</span>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-green-50 text-green-700 border-green-200">
+                            Confirmé
+                          </span>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                          <p className="text-sm font-medium text-gray-900">Conducteur</p>
+                          <Link
+                            href={`/dashboard/servers/${group.driver_server_id}`}
+                            className="text-sm text-gray-700 hover:text-[#D4AF37] transition-colors"
+                          >
+                            {group.driver_name}
+                          </Link>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {group.vehicle} • {group.capacity} places • {group.passenger_count} passager{group.passenger_count !== 1 ? 's' : ''}
+                          </p>
+                          {group.estimated_distance_km !== undefined && group.estimated_distance_km !== null && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              Distance estimée : {group.estimated_distance_km.toFixed(1)} km
+                            </p>
+                          )}
+                        </div>
+                        <div className="mb-3">
+                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers</p>
+                          <div className="space-y-2">
+                            {group.passengers && group.passengers.length > 0 ? group.passengers.map((passenger: any) => (
+                              <div key={passenger.server_id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-50">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-5 h-5 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-xs font-bold text-[#D4AF37]">
+                                    {passenger.pickup_order}
+                                  </span>
+                                  <Link
+                                    href={`/dashboard/servers/${passenger.server_id}`}
+                                    className="text-sm text-gray-700 hover:text-[#D4AF37] transition-colors"
+                                  >
+                                    {passenger.name}
+                                  </Link>
+                                </div>
+                                <span className="text-xs text-gray-500 capitalize">{passenger.pickup_status || 'En attente'}</span>
+                              </div>
+                            )) : (
+                              <p className="text-xs text-gray-500">Aucun passager dans ce groupe.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <UrgentStaffingPanel eventId={eventId} eventUrgent={event.urgent} />
 

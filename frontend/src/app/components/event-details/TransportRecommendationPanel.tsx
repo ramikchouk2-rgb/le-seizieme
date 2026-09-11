@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import Link from 'next/link';
 import { TransportRecommendationResponse, confirmTransportRecommendation, TransportConfirmationRequest, TransportConfirmationResponse, TransportConfirmationGroupResponse } from '@/app/lib/api';
 import ConfirmTransportDialog from './ConfirmTransportDialog';
 import { useAnnouncer } from '@/app/components/ui/Announcer';
@@ -12,6 +13,7 @@ interface TransportRecommendationPanelProps {
   onRetry: () => void;
   eventId: string;
   onConfirmed?: () => void;
+  confirmedStaffCount?: number;
 }
 
 const CONSTRAINT_ITEMS = [
@@ -38,12 +40,26 @@ export default function TransportRecommendationPanel({
   onRetry,
   eventId,
   onConfirmed,
+  confirmedStaffCount = 0,
 }: TransportRecommendationPanelProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmResult, setConfirmResult] = useState<TransportConfirmationResponse | null>(null);
   const { announceSuccess, announceError } = useAnnouncer();
+
+  const totalCapacity = useMemo(() => 
+    recommendation?.drivers.reduce((sum, d) => sum + d.available_seats, 0) ?? 0, 
+    [recommendation]
+  );
+  const totalVehicles = useMemo(() => 
+    recommendation?.drivers.length ?? 0, 
+    [recommendation]
+  );
+  const coveredStaff = useMemo(() => 
+    (recommendation?.total_assigned ?? 0) + (recommendation?.drivers.length ?? 0), 
+    [recommendation]
+  );
 
   if (loading) {
     return (
@@ -69,11 +85,23 @@ export default function TransportRecommendationPanel({
     );
   }
 
+  // No recommendation yet
   if (!recommendation) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Transport recommandé</h3>
-        <p className="text-gray-500 text-sm">Aucun transport recommandé pour le moment.</p>
+        {confirmedStaffCount === 0 ? (
+          <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+            <p className="text-sm text-blue-800 mb-2">
+              <strong>Aucun transport recommandé pour le moment.</strong>
+            </p>
+            <p className="text-xs text-blue-700">
+              Confirmez d'abord les serveurs avant de générer le plan de transport.
+            </p>
+          </div>
+        ) : (
+          <p className="text-gray-500 text-sm">Cliquez sur « Recommander le transport » pour générer un plan.</p>
+        )}
       </div>
     );
   }
@@ -162,21 +190,29 @@ export default function TransportRecommendationPanel({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
         <div className="bg-gray-50 rounded-lg p-3 text-center">
-          <p className="text-2xl font-bold text-gray-900">{recommendation.drivers.length}</p>
-          <p className="text-xs text-gray-500">Chauffeurs disponibles</p>
+          <p className="text-2xl font-bold text-gray-900">{confirmedStaffCount}</p>
+          <p className="text-xs text-gray-500">Serveurs confirmés</p>
         </div>
         <div className="bg-gray-50 rounded-lg p-3 text-center">
-          <p className="text-2xl font-bold text-gray-900">{recommendation.drivers.length}</p>
-          <p className="text-xs text-gray-500">Groupes proposés</p>
+          <p className="text-2xl font-bold text-gray-900">{totalVehicles}</p>
+          <p className="text-xs text-gray-500">Véhicules proposés</p>
         </div>
         <div className="bg-gray-50 rounded-lg p-3 text-center">
-          <p className="text-2xl font-bold text-green-600">{recommendation.total_assigned}</p>
+          <p className="text-2xl font-bold text-gray-900">{totalVehicles}</p>
+          <p className="text-xs text-gray-500">Chauffeurs</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-3 text-center">
+          <p className="text-2xl font-bold text-green-600">{recommendation?.total_assigned ?? 0}</p>
           <p className="text-xs text-gray-500">Passagers transportés</p>
         </div>
         <div className="bg-gray-50 rounded-lg p-3 text-center">
-          <p className="text-2xl font-bold text-amber-600">{recommendation.total_unassigned}</p>
+          <p className="text-2xl font-bold text-blue-600">{totalCapacity}</p>
+          <p className="text-xs text-gray-500">Capacité totale</p>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-3 text-center">
+          <p className="text-2xl font-bold text-amber-600">{recommendation?.total_unassigned ?? 0}</p>
           <p className="text-xs text-gray-500">Non affectés</p>
         </div>
       </div>
@@ -184,107 +220,140 @@ export default function TransportRecommendationPanel({
       {!hasGroups ? (
         <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
           <p className="text-sm text-amber-800">
-            Aucun transport ne peut être recommandé pour le moment.
+            <strong>Aucun transport ne peut être recommandé pour le moment.</strong>
+          </p>
+          <p className="text-xs text-amber-700 mt-1">
+            {recommendation.transport_status === 'NO_SELECTED_STAFF' 
+              ? 'Aucun serveur confirmé pour cet événement.' 
+              : 'Aucun chauffeur éligible (véhicule, capacité, ou distance).'}
           </p>
         </div>
       ) : (
-        <div className="space-y-4 mb-6">
-          {recommendation.drivers.map((driver, index) => {
-            const groupPassengersList = recommendation.passengers.filter((p, i) => {
-              let passengerIndex = 0;
-              for (let d = 0; d < index; d++) {
-                const driverAvailableSeats = recommendation.drivers[d].available_seats;
-                if (i >= passengerIndex && i < passengerIndex + driverAvailableSeats) {
-                  return false;
+        <>
+          <div className="space-y-4 mb-6">
+            {recommendation.drivers.map((driver, index) => {
+              const groupPassengersList = recommendation.passengers.filter((p, i) => {
+                let passengerIndex = 0;
+                for (let d = 0; d < index; d++) {
+                  const driverAvailableSeats = recommendation.drivers[d].available_seats;
+                  if (i >= passengerIndex && i < passengerIndex + driverAvailableSeats) {
+                    return false;
+                  }
+                  passengerIndex += driverAvailableSeats;
                 }
-                passengerIndex += driverAvailableSeats;
-              }
-              return i >= passengerIndex && i < passengerIndex + driver.available_seats;
-            });
+                return i >= passengerIndex && i < passengerIndex + driver.available_seats;
+              });
 
-            return (
-              <div key={driver.server_id} className="border border-gray-100 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-gray-900">Groupe {index + 1}</span>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
-                      driver.can_transport_coworkers
-                        ? 'bg-green-50 text-green-700 border-green-200'
-                        : 'bg-gray-50 text-gray-700 border-gray-200'
-                    }`}>
-                      {driver.can_transport_coworkers ? 'Transport autorisé' : 'Transport non autorisé'}
-                    </span>
-                  </div>
-                </div>
+              const remainingCapacity = driver.available_seats - groupPassengersList.length;
+              const isAtCapacity = remainingCapacity <= 0;
 
-                <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                  <p className="text-sm font-medium text-gray-900">Chauffeur</p>
-                  <p className="text-sm text-gray-700">{driver.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {driver.vehicle} • {driver.capacity} places • {driver.available_seats} passagers max.
-                  </p>
-                </div>
-
-                <div className="mb-3">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers</p>
-                  <div className="space-y-2">
-                    {groupPassengersList.length > 0 ? groupPassengersList.map((passenger) => (
-                      <div key={passenger.server_id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-50">
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-xs font-bold text-[#D4AF37]">
-                            {passenger.pickup_order}
-                          </span>
-                          <span className="text-sm text-gray-700">{passenger.name}</span>
-                        </div>
-                        <span className="text-xs text-gray-500">
-                          {passenger.distance_from_driver_km.toFixed(1)} km
+              return (
+                <div key={driver.server_id} className="border border-gray-100 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-gray-900">Groupe {index + 1}</span>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
+                        driver.can_transport_coworkers
+                          ? 'bg-green-50 text-green-700 border-green-200'
+                          : 'bg-gray-50 text-gray-700 border-gray-200'
+                      }`}>
+                        {driver.can_transport_coworkers ? 'Transport autorisé' : 'Transport non autorisé'}
+                      </span>
+                      {isAtCapacity && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-red-50 text-red-700 border-red-200">
+                          Capacité atteinte
                         </span>
-                      </div>
-                    )) : (
-                      <p className="text-xs text-gray-500">Aucun passager dans ce groupe.</p>
-                    )}
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                    <p className="text-sm font-medium text-gray-900">Chauffeur</p>
+                    <Link
+                      href={`/dashboard/servers/${driver.server_id}`}
+                      className="text-sm text-gray-700 hover:text-[#D4AF37] transition-colors"
+                    >
+                      {driver.name}
+                    </Link>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {driver.vehicle} • {driver.capacity} places • {driver.available_seats} passagers max.
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Places restantes : {remainingCapacity} / {driver.available_seats}
+                    </p>
+                  </div>
+
+                  <div className="mb-3">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers</p>
+                    <div className="space-y-2">
+                      {groupPassengersList.length > 0 ? groupPassengersList.map((passenger) => (
+                        <div key={passenger.server_id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-50">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-xs font-bold text-[#D4AF37]">
+                              {passenger.pickup_order}
+                            </span>
+                            <Link
+                              href={`/dashboard/servers/${passenger.server_id}`}
+                              className="text-sm text-gray-700 hover:text-[#D4AF37] transition-colors"
+                            >
+                              {passenger.name}
+                            </Link>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            {passenger.distance_from_driver_km.toFixed(1)} km
+                          </span>
+                        </div>
+                      )) : (
+                        <p className="text-xs text-gray-500">Aucun passager dans ce groupe.</p>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {recommendation.unassigned_passengers.length > 0 && (
-        <div className="mb-6">
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers non affectés</p>
-          <div className="space-y-2">
-            {recommendation.unassigned_passengers.map((passenger) => (
-              <div key={passenger.server_id} className="flex items-center justify-between bg-amber-50 rounded-lg px-3 py-2 border border-amber-100">
-                <span className="text-sm text-gray-700">{passenger.name}</span>
-                <span className="text-xs text-amber-700">{passenger.reason}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        </div>
-      )}
 
-      <div className="mb-4">
-        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Contraintes respectées</p>
-        <div className="flex flex-wrap gap-2">
-          {CONSTRAINT_ITEMS.map((item) => {
-            const passed = item.check(recommendation);
-            return (
-              <span
-                key={item.label}
-                className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium border ${
-                  passed
-                    ? 'bg-green-50 text-green-700 border-green-200'
-                    : 'bg-gray-50 text-gray-500 border-gray-200'
-                }`}
-              >
-                {passed ? '✓' : '○'} {item.label}
-              </span>
-            );
-          })}
-        </div>
-      </div>
+          {recommendation.unassigned_passengers.length > 0 && (
+            <div className="mb-6">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers non affectés</p>
+              <div className="space-y-2">
+                {recommendation.unassigned_passengers.map((passenger) => (
+                  <div key={passenger.server_id} className="flex items-center justify-between bg-amber-50 rounded-lg px-3 py-2 border border-amber-100">
+                    <Link
+                      href={`/dashboard/servers/${passenger.server_id}`}
+                      className="text-sm text-gray-700 hover:text-[#D4AF37] transition-colors"
+                    >
+                      {passenger.name}
+                    </Link>
+                    <span className="text-xs text-amber-700">{passenger.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mb-4">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Contraintes respectées</p>
+            <div className="flex flex-wrap gap-2">
+              {CONSTRAINT_ITEMS.map((item) => {
+                const passed = item.check(recommendation);
+                return (
+                  <span
+                    key={item.label}
+                    className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium border ${
+                      passed
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-gray-50 text-gray-500 border-gray-200'
+                    }`}
+                  >
+                    {passed ? '✓' : '○'} {item.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
 
       {hasGroups && !confirmResult && (
         <div className="mt-6 flex justify-end">
