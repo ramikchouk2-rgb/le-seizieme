@@ -209,15 +209,22 @@ export interface EventDetailData {
   event: {
     id: string;
     name: string;
+    client_name: string;
+    city_id: string;
     city: string;
+    address: string;
     start_datetime: string;
     end_datetime: string;
     guest_count: number;
+    event_type: string;
     alcohol_service: boolean;
     food_products_count: number;
     priority: string;
     urgent: boolean;
+    is_urgent: boolean;
+    required_response_minutes: number | null;
     status: string;
+    notes: string | null;
   };
   staffing: {
     requested: number;

@@ -119,6 +119,30 @@ class EventCreateRequest(BaseModel):
     notes: Optional[str] = None
 
 
+class EventUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    client_name: Optional[str] = None
+    city_id: Optional[str] = None
+    address: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    guest_count: Optional[int] = None
+    event_type: Optional[str] = None
+    alcohol_service: Optional[bool] = None
+    food_products_count: Optional[int] = None
+    priority: Optional[str] = None
+    is_urgent: Optional[bool] = None
+    required_response_minutes: Optional[int] = None
+    notes: Optional[str] = None
+
+    @field_validator('guest_count')
+    @classmethod
+    def guest_count_must_be_positive(cls, v):
+        if v is not None and v < 1:
+            raise ValueError('Le nombre d\'invités doit être au moins 1.')
+        return v
+
+
 class EventCreateResponse(BaseModel):
     id: str
     name: str
@@ -143,15 +167,21 @@ class EventCreateResponse(BaseModel):
 class EventDetailResponse(BaseModel):
     id: str
     name: str
+    client_name: Optional[str] = None
+    city_id: Optional[str] = None
     city: str
+    address: Optional[str] = None
     start_datetime: str
     end_datetime: str
     guest_count: int
+    event_type: Optional[str] = None
     alcohol_service: bool
     food_products_count: int
     priority: str
-    urgent: bool
+    is_urgent: bool
+    required_response_minutes: Optional[int] = None
     status: str
+    notes: Optional[str] = None
     requirements: list[EventRequirementDetailResponse]
 
 

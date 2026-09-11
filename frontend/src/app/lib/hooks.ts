@@ -13,6 +13,7 @@ import {
   generateTransportRecommendation,
   confirmTransportRecommendation,
   updateEventStatus,
+  updateEvent,
   getEventOperations,
   initializeEventAttendance,
   checkInStaff,
@@ -55,6 +56,7 @@ import {
   getEventAttendance,
   getAttendanceSummary as getEventAttendanceSummary,
   ApiError,
+  EventUpdateRequest,
 } from '@/app/lib/api';
 
 export function useEvents(params?: Parameters<typeof getEvents>[0]) {
@@ -255,6 +257,21 @@ export function useUpdateEventStatus() {
   return useMutation({
     mutationFn: ({ eventId, payload }: { eventId: string; payload: { status: string } }) =>
       updateEventStatus(eventId, payload),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['events'] });
+      queryClient.invalidateQueries({ queryKey: ['eventStats'] });
+      queryClient.invalidateQueries({ queryKey: ['upcomingEvents'] });
+      queryClient.invalidateQueries({ queryKey: ['urgentEvents'] });
+    },
+  });
+}
+
+export function useUpdateEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, payload }: { eventId: string; payload: EventUpdateRequest }) =>
+      updateEvent(eventId, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
       queryClient.invalidateQueries({ queryKey: ['events'] });

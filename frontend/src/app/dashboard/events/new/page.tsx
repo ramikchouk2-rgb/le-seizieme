@@ -30,7 +30,7 @@ export default function NewEventPage() {
       )}
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-        <EventForm onSuccess={handleSuccess} onCancel={() => router.back()} />
+        <EventForm mode="create" onSuccess={handleSuccess} onCancel={() => router.back()} />
       </div>
     </div>
   );

@@ -29,6 +29,7 @@ from app.models.events import (
     EventStatsResponse,
     EventStatusUpdateRequest,
     EventStatusUpdateResponse,
+    EventUpdateRequest,
     RequirementCreateRequest,
     RequirementResponse,
     RequirementUpdateRequest,
@@ -64,6 +65,7 @@ from app.services.event_service import (
     load_event_list,
     load_event_stats,
     remove_staff_assignment,
+    update_event,
     update_event_status,
     update_requirement,
     update_staff_assignment,
@@ -98,6 +100,31 @@ async def get_cities() -> list[CityResponse]:
 @router.post("/events", response_model=EventCreateResponse, dependencies=[Depends(require_manager_or_admin)])
 async def create_event_endpoint(payload: EventCreateRequest) -> EventCreateResponse:
     result = await create_event(payload.model_dump())
+    return EventCreateResponse(
+        id=str(result["id"]),
+        name=result["name"],
+        client_name=result["client_name"],
+        city_id=str(result["city_id"]),
+        address=result["address"],
+        start_datetime=result["start_datetime"].isoformat() if result.get("start_datetime") else "",
+        end_datetime=result["end_datetime"].isoformat() if result.get("end_datetime") else "",
+        guest_count=result["guest_count"],
+        event_type=result["event_type"],
+        alcohol_service=result["alcohol_service"],
+        food_products_count=result["food_products_count"],
+        priority=result["priority"],
+        is_urgent=result["is_urgent"],
+        required_response_minutes=result.get("required_response_minutes"),
+        status=result["status"],
+        notes=result.get("notes"),
+        created_at=result["created_at"].isoformat() if result.get("created_at") else "",
+        updated_at=result["updated_at"].isoformat() if result.get("updated_at") else "",
+    )
+
+
+@router.patch("/events/{event_id}", response_model=EventCreateResponse, dependencies=[Depends(require_manager_or_admin)])
+async def update_event_endpoint(event_id: str, payload: EventUpdateRequest) -> EventCreateResponse:
+    result = await update_event(event_id, payload.model_dump(exclude_unset=True))
     return EventCreateResponse(
         id=str(result["id"]),
         name=result["name"],
@@ -274,17 +301,7 @@ async def get_event_detail(event_id: str) -> EventDetailResponse:
     data = await get_event_staff_summary(event_id)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
-    return EventDetailResponse(
-        event=EventDetailEventResponse(**data["event"]),
-        staffing=EventDetailStaffingResponse(**data["staffing"]),
-        requirements=[EventRequirementDetailResponse(requirement_id=r["id"], **{k: v for k, v in r.items() if k != "id"}) for r in data.get("requirements", [])],
-        assignments=data.get("assignments", []),
-        transport=EventDetailTransportResponse(
-            groups=[EventDetailTransportGroupResponse(**g) for g in data.get("transport", {}).get("groups", [])],
-            total_groups=data.get("transport", {}).get("total_groups", 0),
-            total_passengers=data.get("transport", {}).get("total_passengers", 0),
-        ),
-    )
+    return data
 
 
 @router.get("/events/{event_id}/requirements", response_model=EventRequirementsResponse, dependencies=[Depends(get_current_user_dep)])
@@ -294,7 +311,7 @@ async def get_requirements(event_id: str) -> EventRequirementsResponse:
         raise HTTPException(status_code=404, detail=data["error"])
     return EventRequirementsResponse(
         event_id=event_id,
-        requirements=[EventRequirementDetailResponse(requirement_id=r["id"], **{k: v for k, v in r.items() if k != "id"}) for r in data.get("requirements", [])],
+        requirements=[EventRequirementDetailResponse(**r) for r in data.get("requirements", [])],
     )
 
 

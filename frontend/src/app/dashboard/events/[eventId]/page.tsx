@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Header from '@/app/components/dashboard/Header';
 import EventHeader from '@/app/components/event-details/EventHeader';
@@ -28,6 +28,7 @@ type LoadingState = 'loading' | 'error' | 'success' | 'not_found';
 
 export default function EventDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const eventId = params.eventId as string;
   const { announceSuccess, announceError } = useAnnouncer();
 
@@ -171,7 +172,7 @@ export default function EventDetailPage() {
       <Header title="Événement" />
       <main className="p-8">
         <div className="max-w-7xl mx-auto">
-          <EventHeader event={eventWithRequirements} />
+          <EventHeader event={eventWithRequirements} onEdit={() => router.push(`/dashboard/events/${eventId}/edit`)} />
 
           <nav className="flex items-center gap-1 mb-6 bg-white rounded-xl border border-gray-200 p-1 shadow-sm" aria-label="Sous-pages de l'événement">
             <Link

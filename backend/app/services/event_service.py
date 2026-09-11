@@ -94,9 +94,9 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
     async with pool.acquire() as conn:
         event_row = await conn.fetchrow(
             """
-            SELECT id, name, city_id, start_datetime, end_datetime,
-                   guest_count, alcohol_service, food_products_count,
-                   priority, is_urgent, status
+            SELECT id, name, client_name, city_id, address, start_datetime, end_datetime,
+                   guest_count, event_type, alcohol_service, food_products_count,
+                   priority, is_urgent, required_response_minutes, status, notes
             FROM events
             WHERE id = $1
             """,
@@ -260,15 +260,21 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
             "event": {
                 "id": str(event["id"]),
                 "name": event["name"],
+                "client_name": event.get("client_name"),
+                "city_id": str(event.get("city_id")) if event.get("city_id") else None,
                 "city": city_name,
+                "address": event.get("address"),
                 "start_datetime": event_start,
                 "end_datetime": event_end,
                 "guest_count": event["guest_count"],
+                "event_type": event.get("event_type"),
                 "alcohol_service": event["alcohol_service"],
                 "food_products_count": event["food_products_count"],
                 "priority": event["priority"],
                 "urgent": event["is_urgent"],
+                "required_response_minutes": event.get("required_response_minutes"),
                 "status": event["status"],
+                "notes": event.get("notes"),
             },
             "staffing": {
                 "requested": total_requested,
@@ -276,7 +282,9 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "missing": total_missing,
                 "percentage": percentage,
             },
-            "requirements": requirements,
+            "requirements": [
+                {**r, "requirement_id": r.pop("id")} for r in requirements
+            ],
             "assignments": assignments,
             "transport": {
                 "groups": transport_groups,
@@ -1101,6 +1109,59 @@ async def create_event(data: dict[str, Any]) -> dict[str, Any]:
             data.get("status", "PLANNED"),
             data.get("notes"),
         )
+        return dict(row)
+
+
+async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        event_row = await conn.fetchrow(
+            "SELECT id FROM events WHERE id = $1",
+            event_id,
+        )
+        if not event_row:
+            raise HTTPException(status_code=404, detail="Événement introuvable.")
+
+        # Validate datetime if provided
+        if "start_datetime" in data or "end_datetime" in data:
+            start = data.get("start_datetime")
+            end = data.get("end_datetime")
+            if start and end:
+                start_dt = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
+                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00")) if isinstance(end, str) else end
+                if end_dt <= start_dt:
+                    raise HTTPException(status_code=422, detail="La date de fin doit être postérieure à la date de début.")
+
+        # Validate guest_count if provided
+        if "guest_count" in data and data["guest_count"] is not None and data["guest_count"] < 1:
+            raise HTTPException(status_code=422, detail="Le nombre d'invités doit être au moins 1.")
+
+        # Build dynamic update query
+        allowed_fields = [
+            "name", "client_name", "city_id", "address",
+            "start_datetime", "end_datetime", "guest_count", "event_type",
+            "alcohol_service", "food_products_count",
+            "priority", "is_urgent", "required_response_minutes",
+            "notes"
+        ]
+
+        updates = []
+        values = []
+        idx = 1
+        for field in allowed_fields:
+            if field in data and data[field] is not None:
+                updates.append(f"{field} = ${idx}")
+                values.append(data[field])
+                idx += 1
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="Aucune modification fournie.")
+
+        updates.append(f"updated_at = NOW()")
+        values.append(event_id)
+
+        query = f"UPDATE events SET {', '.join(updates)} WHERE id = ${idx} RETURNING *"
+        row = await conn.fetchrow(query, *values)
         return dict(row)
 
 

@@ -71,6 +71,7 @@ export interface City {
 }
 
 export interface EventCreateRequest {
+  id?: string;
   name: string;
   client_name: string;
   city_id: string;
@@ -86,6 +87,44 @@ export interface EventCreateRequest {
   required_response_minutes?: number;
   status?: string;
   notes?: string;
+}
+
+export interface EventUpdateRequest {
+  name?: string;
+  client_name?: string;
+  city_id?: string;
+  address?: string;
+  start_datetime?: string;
+  end_datetime?: string;
+  guest_count?: number;
+  event_type?: string;
+  alcohol_service?: boolean;
+  food_products_count?: number;
+  priority?: string;
+  is_urgent?: boolean;
+  required_response_minutes?: number;
+  notes?: string;
+}
+
+export interface EventCreateResponse {
+  id: string;
+  name: string;
+  client_name: string;
+  city_id: string;
+  address: string;
+  start_datetime: string;
+  end_datetime: string;
+  guest_count: number;
+  event_type: string;
+  alcohol_service: boolean;
+  food_products_count: number;
+  priority: string;
+  is_urgent: boolean;
+  required_response_minutes: number | null;
+  status: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DashboardServerStats {
@@ -963,6 +1002,16 @@ export async function updateEventStatus(
   payload: EventStatusUpdateRequest,
 ): Promise<EventStatusUpdateResponse> {
   return fetchAPI<EventStatusUpdateResponse>(`/events/${eventId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateEvent(
+  eventId: string,
+  payload: EventUpdateRequest,
+): Promise<EventCreateResponse> {
+  return fetchAPI<EventCreateResponse>(`/events/${eventId}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
