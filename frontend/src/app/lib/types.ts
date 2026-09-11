@@ -48,6 +48,7 @@ export interface ServerProfile {
   last_name: string;
   gender: string;
   city: string;
+  city_id: string;
   years_experience: number;
   worker_type: string;
   availability_status: string;
@@ -83,6 +84,14 @@ export interface ServerProfile {
     previous_month_points: number;
     rank: number | null;
   };
+  speed_score: number;
+  punctuality_score: number;
+  presentation_score: number;
+  communication_score: number;
+  teamwork_score: number;
+  discipline_score: number;
+  endurance_score: number;
+  is_active: boolean;
 }
 
 export interface ServerStats {
@@ -158,6 +167,58 @@ export interface ServerEventHistory {
   event_date: string;
   role: string;
   assignment_status: string;
+}
+
+export interface ServerCreateRequest {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  gender: string;
+  city_id: string;
+  years_experience?: number;
+  worker_type?: string;
+  speed_score?: number;
+  punctuality_score?: number;
+  presentation_score?: number;
+  communication_score?: number;
+  teamwork_score?: number;
+  discipline_score?: number;
+  endurance_score?: number;
+}
+
+export interface ServerUpdateRequest {
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  gender?: string;
+  city_id?: string;
+  years_experience?: number;
+  worker_type?: string;
+  speed_score?: number;
+  punctuality_score?: number;
+  presentation_score?: number;
+  communication_score?: number;
+  teamwork_score?: number;
+  discipline_score?: number;
+  endurance_score?: number;
+  is_active?: boolean;
+}
+
+export interface ServerResponse {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  gender: string;
+  city_id: string;
+  years_experience: number;
+  worker_type?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ActivityItem {

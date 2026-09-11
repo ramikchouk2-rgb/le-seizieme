@@ -47,6 +47,8 @@ import {
   getServer,
   getServers,
   createEvent,
+  createServer,
+  updateServer,
   getCities,
   getServerAvailability,
   createServerAvailability,
@@ -57,6 +59,9 @@ import {
   getAttendanceSummary as getEventAttendanceSummary,
   ApiError,
   EventUpdateRequest,
+  ServerCreateRequest,
+  ServerUpdateRequest,
+  ServerResponse,
 } from '@/app/lib/api';
 
 export function useEvents(params?: Parameters<typeof getEvents>[0]) {
@@ -278,6 +283,30 @@ export function useUpdateEvent() {
       queryClient.invalidateQueries({ queryKey: ['eventStats'] });
       queryClient.invalidateQueries({ queryKey: ['upcomingEvents'] });
       queryClient.invalidateQueries({ queryKey: ['urgentEvents'] });
+    },
+  });
+}
+
+export function useCreateServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ServerCreateRequest) => createServer(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['serverStats'] });
+    },
+  });
+}
+
+export function useUpdateServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ serverId, payload }: { serverId: string; payload: ServerUpdateRequest }) =>
+      updateServer(serverId, payload),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['serverDetail', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['serverStats'] });
     },
   });
 }

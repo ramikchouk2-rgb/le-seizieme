@@ -1,10 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { ServerListItem } from '@/app/components/dashboard/types';
 
 interface ServerTableProps {
   servers: ServerListItem[];
-  onSelect: (server: ServerListItem) => void;
   sortBy: string;
   sortOrder: 'asc' | 'desc';
   onSort: (field: string) => void;
@@ -31,7 +31,7 @@ function SortIcon({ field, active, order }: { field: string; active: boolean; or
   return <span className="text-[#D4AF37] ml-1">{order === 'asc' ? '↑' : '↓'}</span>;
 }
 
-export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSort }: ServerTableProps) {
+export default function ServerTable({ servers, sortBy, sortOrder, onSort }: ServerTableProps) {
   if (servers.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-12 text-center shadow-sm">
@@ -81,11 +81,13 @@ export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSo
               {servers.map((server) => (
                 <tr
                   key={server.id}
-                  className="hover:bg-gray-50/50 cursor-pointer transition-colors"
-                  onClick={() => onSelect(server)}
+                  className="hover:bg-gray-50/50 transition-colors"
                 >
                   <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
+                    <Link
+                      href={`/dashboard/servers/${server.id}`}
+                      className="flex items-center gap-2"
+                    >
                       <div className="w-8 h-8 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-[#D4AF37] text-xs font-bold">
                         {server.first_name[0]}{server.last_name[0]}
                       </div>
@@ -94,7 +96,7 @@ export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSo
                           {server.first_name} {server.last_name}
                         </p>
                       </div>
-                    </div>
+                    </Link>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${BADGE_COLORS[server.gender] || 'bg-gray-50 text-gray-700'}`}>
@@ -156,12 +158,12 @@ export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSo
                     {server.monthly_points} pts
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onSelect(server); }}
+                    <Link
+                      href={`/dashboard/servers/${server.id}`}
                       className="text-[#D4AF37] hover:text-[#B8941E] font-medium"
                     >
                       Profil
-                    </button>
+                    </Link>
                   </td>
                 </tr>
               ))}
@@ -173,10 +175,10 @@ export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSo
       {/* Mobile cards */}
       <div className="lg:hidden space-y-4">
         {servers.map((server) => (
-          <div
+          <Link
             key={server.id}
-            className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
-            onClick={() => onSelect(server)}
+            href={`/dashboard/servers/${server.id}`}
+            className="block bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
@@ -217,15 +219,12 @@ export default function ServerTable({ servers, onSelect, sortBy, sortOrder, onSo
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm font-semibold text-[#D4AF37]">{server.monthly_points} pts</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onSelect(server); }}
-                  className="text-xs bg-[#D4AF37] text-white px-3 py-1.5 rounded-lg font-medium"
-                >
+                <span className="text-xs bg-[#D4AF37] text-white px-3 py-1.5 rounded-lg font-medium">
                   Profil
-                </button>
+                </span>
               </div>
             </div>
-          </div>
+          </Link>
         ))}
       </div>
     </>

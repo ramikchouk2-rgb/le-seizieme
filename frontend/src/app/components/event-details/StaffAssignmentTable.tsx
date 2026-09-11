@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { StaffAssignment, ASSIGNMENT_STATUSES } from '@/app/components/dashboard/types';
 
 interface StaffAssignmentTableProps {
@@ -154,9 +155,12 @@ export default function StaffAssignmentTable({
                       {assignment.first_name[0]}{assignment.last_name[0]}
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-900">
+                      <Link
+                        href={`/dashboard/servers/${assignment.server_id}`}
+                        className="text-sm font-medium text-gray-900 hover:text-[#D4AF37] transition-colors"
+                      >
                         {assignment.first_name} {assignment.last_name}
-                      </p>
+                      </Link>
                       <p className="text-xs text-gray-500">{assignment.city}</p>
                     </div>
                   </div>

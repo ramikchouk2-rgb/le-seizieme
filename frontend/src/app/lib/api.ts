@@ -1,15 +1,30 @@
 import type {
   ActivityItem,
   EventDetailData,
+  ServerCreateRequest,
   ServerFilters,
   ServerListItem,
   ServerListResponse,
   ServerProfile,
+  ServerResponse,
   ServerStats,
+  ServerUpdateRequest,
   WorkerType,
 } from '@/app/lib/types';
 
-export type { ActivityItem, ServerFilters, ServerListItem, ServerListResponse, ServerProfile, ServerStats, WorkerType, EventDetailData } from '@/app/lib/types';
+export type {
+  ActivityItem,
+  ServerCreateRequest,
+  ServerFilters,
+  ServerListItem,
+  ServerListResponse,
+  ServerProfile,
+  ServerResponse,
+  ServerStats,
+  ServerUpdateRequest,
+  WorkerType,
+  EventDetailData,
+} from '@/app/lib/types';
 export type { LoginResponse, UserResponse } from '@/app/lib/api-client';
 export { ApiError } from '@/app/lib/api-client';
 export { login, getCurrentUser, logout } from '@/app/lib/api-client';
@@ -843,6 +858,25 @@ export async function getServer(serverId: string): Promise<ServerProfile | null>
     }
     throw error;
   }
+}
+
+export async function createServer(
+  payload: ServerCreateRequest,
+): Promise<ServerResponse> {
+  return fetchAPI<ServerResponse>('/servers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateServer(
+  serverId: string,
+  payload: ServerUpdateRequest,
+): Promise<ServerResponse> {
+  return fetchAPI<ServerResponse>(`/servers/${serverId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getEvents(params: EventListParams = {}): Promise<EventListResponse> {

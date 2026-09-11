@@ -3,6 +3,7 @@ from typing import Any
 
 from app.core.database import get_pool
 from app.utils.datetime_utils import now_naive_utc
+from fastapi import HTTPException
 
 
 SORT_WHITELIST = {
@@ -411,3 +412,242 @@ async def load_server_stats() -> dict[str, int]:
             "unavailable": row["unavailable"] if row else 0,
             "with_vehicle": row["with_vehicle"] if row else 0,
         }
+
+
+async def create_server(data: dict[str, Any]) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Check if email already exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM servers WHERE email = $1",
+            data["email"],
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Un serveur avec cet email existe déjà.")
+
+        # Create server
+        row = await conn.fetchrow(
+            """
+            INSERT INTO servers (first_name, last_name, email, phone, gender, city_id, years_experience)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at
+            """,
+            data["first_name"],
+            data["last_name"],
+            data["email"],
+            data["phone"],
+            data["gender"],
+            data["city_id"],
+            data.get("years_experience", 0),
+        )
+
+        server_id = row["id"]
+
+        # Create server_profile with worker type
+        worker_type = data.get("worker_type", "BALANCED")
+        await conn.execute(
+            """
+            INSERT INTO server_profile (server_id, speed_score, punctuality_score, presentation_score,
+                                        communication_score, teamwork_score, discipline_score,
+                                        endurance_score, worker_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            server_id,
+            data.get("speed_score", 5),
+            data.get("punctuality_score", 5),
+            data.get("presentation_score", 5),
+            data.get("communication_score", 5),
+            data.get("teamwork_score", 5),
+            data.get("discipline_score", 5),
+            data.get("endurance_score", 5),
+            worker_type,
+        )
+
+        return dict(row)
+
+
+async def update_server(server_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Check if server exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM servers WHERE id = $1",
+            server_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Serveur introuvable.")
+
+        # Check email uniqueness if being updated
+        if "email" in data and data["email"] is not None:
+            existing_email = await conn.fetchrow(
+                "SELECT id FROM servers WHERE email = $1 AND id != $2",
+                data["email"],
+                server_id,
+            )
+            if existing_email:
+                raise HTTPException(status_code=409, detail="Un serveur avec cet email existe déjà.")
+
+        # Build dynamic update query for servers table
+        allowed_server_fields = [
+            "first_name", "last_name", "email", "phone", "gender",
+            "city_id", "years_experience", "is_active"
+        ]
+
+        server_updates = []
+        server_values = []
+        idx = 1
+        for field in allowed_server_fields:
+            if field in data and data[field] is not None:
+                server_updates.append(f"{field} = ${idx}")
+                server_values.append(data[field])
+                idx += 1
+
+        if server_updates:
+            server_updates.append("updated_at = NOW()")
+            server_values.append(server_id)
+            query = f"UPDATE servers SET {', '.join(server_updates)} WHERE id = ${idx} RETURNING id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at"
+            row = await conn.fetchrow(query, *server_values)
+        else:
+            row = await conn.fetchrow(
+                "SELECT id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at FROM servers WHERE id = $1",
+                server_id,
+            )
+
+        # Update server_profile if worker_type or scores provided
+        profile_fields = {
+            "worker_type": "worker_type",
+            "speed_score": "speed_score",
+            "punctuality_score": "punctuality_score",
+            "presentation_score": "presentation_score",
+            "communication_score": "communication_score",
+            "teamwork_score": "teamwork_score",
+            "discipline_score": "discipline_score",
+            "endurance_score": "endurance_score",
+        }
+
+        profile_updates = []
+        profile_values = [server_id]
+        idx = 2
+        for api_field, db_field in profile_fields.items():
+            if api_field in data and data[api_field] is not None:
+                profile_updates.append(f"{db_field} = ${idx}")
+                profile_values.append(data[api_field])
+                idx += 1
+
+        if profile_updates:
+            profile_updates.append("updated_at = NOW()")
+            query = f"UPDATE server_profile SET {', '.join(profile_updates)} WHERE server_id = $1"
+            await conn.execute(query, *profile_values)
+
+        return dict(row)
+
+
+async def add_server_skill(server_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Check if server exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM servers WHERE id = $1",
+            server_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Serveur introuvable.")
+
+        # Check if skill exists
+        skill = await conn.fetchrow(
+            "SELECT id FROM skills WHERE id = $1",
+            data["skill_id"],
+        )
+        if not skill:
+            raise HTTPException(status_code=404, detail="Compétence introuvable.")
+
+        # Check if skill already assigned
+        existing_skill = await conn.fetchrow(
+            "SELECT 1 FROM server_skills WHERE server_id = $1 AND skill_id = $2",
+            server_id,
+            data["skill_id"],
+        )
+        if existing_skill:
+            raise HTTPException(status_code=409, detail="Cette compétence est déjà attribuée au serveur.")
+
+        row = await conn.fetchrow(
+            """
+            INSERT INTO server_skills (server_id, skill_id, level, years_experience)
+            VALUES ($1, $2, $3, $4)
+            RETURNING server_id, skill_id, level, years_experience
+            """,
+            server_id,
+            data["skill_id"],
+            data["level"],
+            data.get("years_experience", 0),
+        )
+
+        # Get skill name
+        skill_name = await conn.fetchrow(
+            "SELECT name FROM skills WHERE id = $1",
+            data["skill_id"],
+        )
+
+        return {
+            "skill_id": str(row["skill_id"]),
+            "name": skill_name["name"],
+            "level": row["level"],
+            "years_experience": row["years_experience"],
+        }
+
+
+async def update_server_skill(server_id: str, skill_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Check if skill assignment exists
+        existing = await conn.fetchrow(
+            "SELECT 1 FROM server_skills WHERE server_id = $1 AND skill_id = $2",
+            server_id,
+            skill_id,
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Compétence non trouvée pour ce serveur.")
+
+        updates = []
+        values = [server_id, skill_id]
+        idx = 3
+
+        if "level" in data and data["level"] is not None:
+            updates.append(f"level = ${idx}")
+            values.append(data["level"])
+            idx += 1
+
+        if "years_experience" in data and data["years_experience"] is not None:
+            updates.append(f"years_experience = ${idx}")
+            values.append(data["years_experience"])
+            idx += 1
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="Aucune modification fournie.")
+
+        query = f"UPDATE server_skills SET {', '.join(updates)} WHERE server_id = $1 AND skill_id = $2 RETURNING server_id, skill_id, level, years_experience"
+        row = await conn.fetchrow(query, *values)
+
+        skill_name = await conn.fetchrow(
+            "SELECT name FROM skills WHERE id = $1",
+            skill_id,
+        )
+
+        return {
+            "skill_id": str(row["skill_id"]),
+            "name": skill_name["name"],
+            "level": row["level"],
+            "years_experience": row["years_experience"],
+        }
+
+
+async def remove_server_skill(server_id: str, skill_id: str) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM server_skills WHERE server_id = $1 AND skill_id = $2",
+            server_id,
+            skill_id,
+        )
+        if result == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Compétence non trouvée pour ce serveur.")

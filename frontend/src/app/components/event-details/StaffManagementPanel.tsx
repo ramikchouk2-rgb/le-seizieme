@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { StaffAssignment, ASSIGNMENT_STATUSES } from '@/app/components/dashboard/types';
 import {
   addStaffAssignment,
@@ -175,9 +176,12 @@ export default function StaffManagementPanel({
                         {(assignment.first_name?.[0] || '?').toUpperCase()}{(assignment.last_name?.[0] || '?').toUpperCase()}
                       </div>
                       <div>
-                        <p className="font-medium text-gray-900">
+                        <Link
+                          href={`/dashboard/servers/${assignment.server_id}`}
+                          className="font-medium text-gray-900 hover:text-[#D4AF37] transition-colors"
+                        >
                           {assignment.first_name} {assignment.last_name}
-                        </p>
+                        </Link>
                         <p className="text-xs text-gray-500">{assignment.city}</p>
                       </div>
                     </div>

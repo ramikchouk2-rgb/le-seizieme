@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import Header from '@/app/components/dashboard/Header';
 import FilterPanel from '@/app/components/servers/FilterPanel';
 import ServerTable from '@/app/components/servers/ServerTable';
 import Pagination from '@/app/components/servers/Pagination';
-import ServerDrawer from '@/app/components/servers/ServerDrawer';
 import { DEFAULT_FILTERS } from '@/app/data/servers';
-import { useServers, useServerStats, useServer } from '@/app/lib/hooks';
-import { ServerFilters, ServerListItem, ServerProfile } from '@/app/lib/types';
+import { useServers, useServerStats } from '@/app/lib/hooks';
+import { ServerFilters } from '@/app/lib/types';
 import { Spinner } from '@/app/lib/loading';
 
 const PAGE_SIZE = 10;
@@ -16,11 +16,9 @@ const PAGE_SIZE = 10;
 export default function ServersPage() {
   const [filters, setFilters] = useState<ServerFilters>(DEFAULT_FILTERS);
   const [page, setPage] = useState(1);
-  const [selectedServer, setSelectedServer] = useState<ServerListItem | null>(null);
 
   const { data: stats, isLoading: statsLoading } = useServerStats();
   const { data: serversData, isLoading: serversLoading, error: serversError, refetch: refetchServers } = useServers(filters, page, PAGE_SIZE);
-  const { data: profile, isLoading: profileLoading } = useServer(selectedServer?.id || '');
 
   const servers = serversData?.servers ?? [];
   const total = serversData?.total ?? 0;
@@ -36,10 +34,6 @@ export default function ServersPage() {
     setPage(1);
   }, []);
 
-  const handleSelect = useCallback((server: ServerListItem) => {
-    setSelectedServer(server);
-  }, []);
-
   const handleReset = useCallback(() => {
     setFilters(DEFAULT_FILTERS);
     setPage(1);
@@ -47,7 +41,17 @@ export default function ServersPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header title="Serveurs" />
+      <Header title="Serveurs" action={
+        <Link
+          href="/dashboard/servers/new"
+          className="inline-flex items-center px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+          </svg>
+          Ajouter un serveur
+        </Link>
+      } />
       <main className="p-8">
         <div className="max-w-7xl mx-auto">
           <p className="text-gray-600 mb-6">
@@ -101,7 +105,6 @@ export default function ServersPage() {
             <>
               <ServerTable
                 servers={servers}
-                onSelect={handleSelect}
                 sortBy={filters.sort_by}
                 sortOrder={filters.sort_order}
                 onSort={handleSort}
@@ -120,13 +123,6 @@ export default function ServersPage() {
           )}
         </div>
       </main>
-
-      <ServerDrawer
-        server={selectedServer}
-        profile={profile ?? null}
-        loading={profileLoading}
-        onClose={() => { setSelectedServer(null); }}
-      />
     </div>
   );
 }

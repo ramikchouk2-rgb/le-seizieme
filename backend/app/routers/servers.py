@@ -2,17 +2,35 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.deps import get_current_user_dep
+from app.core.deps import get_current_user_dep, require_manager_or_admin
 from app.models.servers import (
-    ServerListResponse,
+    ServerAvailabilityCreateRequest,
+    ServerAvailabilityListResponse,
+    ServerAvailabilityResponse,
+    ServerAvailabilityUpdateRequest,
+    ServerCreateRequest,
     ServerListItem,
+    ServerListResponse,
     ServerProfileResponse,
+    ServerSkillCreateRequest,
+    ServerSkillResponse,
+    ServerSkillUpdateRequest,
     ServerStatsResponse,
+    ServerUpdateRequest,
+    ServerVehicleCreateRequest,
+    ServerVehicleResponse,
+    ServerVehicleUpdateRequest,
+    ServerResponse,
 )
 from app.services.server_service import (
+    add_server_skill,
+    create_server,
     load_server_detail,
     load_server_list,
     load_server_stats,
+    remove_server_skill,
+    update_server,
+    update_server_skill,
 )
 
 router = APIRouter()
@@ -75,3 +93,33 @@ async def get_server_detail(server_id: str) -> ServerProfileResponse:
     if not data:
         raise HTTPException(status_code=404, detail="Server not found")
     return ServerProfileResponse(**data)
+
+
+@router.post("/servers", response_model=ServerResponse, dependencies=[Depends(require_manager_or_admin)])
+async def create_server_endpoint(payload: ServerCreateRequest) -> ServerResponse:
+    result = await create_server(payload.model_dump())
+    return ServerResponse(**result)
+
+
+@router.patch("/servers/{server_id}", response_model=ServerResponse, dependencies=[Depends(require_manager_or_admin)])
+async def update_server_endpoint(server_id: str, payload: ServerUpdateRequest) -> ServerResponse:
+    result = await update_server(server_id, payload.model_dump(exclude_unset=True))
+    return ServerResponse(**result)
+
+
+@router.post("/servers/{server_id}/skills", response_model=ServerSkillResponse, dependencies=[Depends(require_manager_or_admin)])
+async def add_skill_endpoint(server_id: str, payload: ServerSkillCreateRequest) -> ServerSkillResponse:
+    result = await add_server_skill(server_id, payload.model_dump())
+    return ServerSkillResponse(**result)
+
+
+@router.patch("/servers/{server_id}/skills/{skill_id}", response_model=ServerSkillResponse, dependencies=[Depends(require_manager_or_admin)])
+async def update_skill_endpoint(server_id: str, skill_id: str, payload: ServerSkillUpdateRequest) -> ServerSkillResponse:
+    result = await update_server_skill(server_id, skill_id, payload.model_dump(exclude_unset=True))
+    return ServerSkillResponse(**result)
+
+
+@router.delete("/servers/{server_id}/skills/{skill_id}", dependencies=[Depends(require_manager_or_admin)])
+async def remove_skill_endpoint(server_id: str, skill_id: str) -> dict[str, str]:
+    await remove_server_skill(server_id, skill_id)
+    return {"message": "Compétence supprimée avec succès."}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { StaffRecommendationResponse, confirmStaffAssignments, ConfirmStaffAssignmentRequest, ConfirmStaffResponse } from '@/app/lib/api';
 import ConfirmStaffDialog from './ConfirmStaffDialog';
@@ -37,6 +37,7 @@ export default function StaffRecommendationPanel({
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmResult, setConfirmResult] = useState<ConfirmStaffResponse | null>(null);
+  const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
   const { announceSuccess, announceError } = useAnnouncer();
 
   if (loading) {
@@ -72,22 +73,73 @@ export default function StaffRecommendationPanel({
     );
   }
 
+  // Initialize selected servers from backend recommendations
+  const initializeSelection = () => {
+    const initial = new Set<string>();
+    for (const req of recommendations.requirements) {
+      for (const candidate of req.selected) {
+        initial.add(candidate.server_id);
+      }
+    }
+    setSelectedServers(initial);
+  };
+
+  // Run initialization once
+  const [initialized, setInitialized] = useState(false);
+  if (!initialized) {
+    initializeSelection();
+    setInitialized(true);
+  }
+
   const totalRequested = recommendations.requirements.reduce(
     (sum, req) => sum + req.requirement.quantity,
     0
   );
-  const totalSelected = recommendations.total_selected;
+  const totalSelected = selectedServers.size;
   const totalMissing = totalRequested - totalSelected;
 
   const selectedAssignments: ConfirmStaffAssignmentRequest[] = [];
   for (const req of recommendations.requirements) {
     for (const candidate of req.selected) {
-      selectedAssignments.push({
-        server_id: candidate.server_id,
-        role: req.requirement.role_name,
-      });
+      if (selectedServers.has(candidate.server_id)) {
+        selectedAssignments.push({
+          server_id: candidate.server_id,
+          role: req.requirement.role_name,
+        });
+      }
+    }
+    // Also check candidates that might have been manually selected
+    for (const candidate of req.candidates) {
+      if (selectedServers.has(candidate.server_id) && !req.selected.some(s => s.server_id === candidate.server_id)) {
+        selectedAssignments.push({
+          server_id: candidate.server_id,
+          role: req.requirement.role_name,
+        });
+      }
     }
   }
+
+  const toggleServerSelection = (serverId: string, requirementId: string) => {
+    setSelectedServers(prev => {
+      const next = new Set(prev);
+      if (next.has(serverId)) {
+        next.delete(serverId);
+      } else {
+        // Check if we're at capacity for this requirement
+        const req = recommendations.requirements.find(r => r.requirement.requirement_id === requirementId);
+        if (req) {
+          const currentSelected = req.selected.filter(s => next.has(s.server_id)).length;
+          const manuallySelected = req.candidates.filter(c => next.has(c.server_id) && !req.selected.some(s => s.server_id === c.server_id)).length;
+          if (currentSelected + manuallySelected >= req.requirement.quantity) {
+            // At capacity, don't add
+            return prev;
+          }
+        }
+        next.add(serverId);
+      }
+      return next;
+    });
+  };
 
   const handleConfirmClick = () => {
     setConfirmOpen(true);
@@ -141,7 +193,7 @@ export default function StaffRecommendationPanel({
         </div>
         <div className="bg-gray-50 rounded-lg p-3 text-center">
           <p className="text-2xl font-bold text-green-600">{totalSelected}</p>
-          <p className="text-xs text-gray-500">Recommandés</p>
+          <p className="text-xs text-gray-500">Sélectionnés</p>
         </div>
         <div className="bg-gray-50 rounded-lg p-3 text-center">
           <p className="text-2xl font-bold text-amber-600">{totalMissing}</p>
@@ -152,8 +204,10 @@ export default function StaffRecommendationPanel({
       <div className="space-y-4">
         {recommendations.requirements.map((req) => {
           const requirement = req.requirement;
-          const selectedCount = req.selected.length;
-          const missingCount = requirement.quantity - selectedCount;
+          const selectedCount = req.selected.filter(s => selectedServers.has(s.server_id)).length;
+          const manuallySelectedCount = req.candidates.filter(c => selectedServers.has(c.server_id) && !req.selected.some(s => s.server_id === c.server_id)).length;
+          const totalForReq = selectedCount + manuallySelectedCount;
+          const missingCount = requirement.quantity - totalForReq;
 
           return (
             <div key={requirement.requirement_id} className="border border-gray-100 rounded-lg p-4">
@@ -168,7 +222,7 @@ export default function StaffRecommendationPanel({
                     )}
                   </h4>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    {requirement.quantity} demandé • {selectedCount} sélectionné • {missingCount} manquant
+                    {requirement.quantity} demandé • {totalForReq} sélectionné • {missingCount} manquant
                   </p>
                 </div>
                 <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${
@@ -180,24 +234,43 @@ export default function StaffRecommendationPanel({
 
               {req.selected.length > 0 && (
                 <div className="space-y-2">
-                  {req.selected.map((candidate) => (
-                    <div key={candidate.server_id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{candidate.name}</p>
-                        <p className="text-xs text-gray-500">
-                          {candidate.experience_years} ans • Niveau {candidate.main_skill_level}/10 • {candidate.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
-                        </p>
+                  {req.selected.map((candidate) => {
+                    const isSelected = selectedServers.has(candidate.server_id);
+                    return (
+                      <div key={candidate.server_id} className={`flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 ${isSelected ? 'bg-green-50 border border-green-100' : ''}`}>
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <button
+                            onClick={() => toggleServerSelection(candidate.server_id, requirement.requirement_id)}
+                            className={`w-4 h-4 rounded border-2 flex-shrink-0 ${isSelected ? 'bg-[#D4AF37] border-[#D4AF37]' : 'border-gray-300'} text-white focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30`}
+                            aria-label={isSelected ? 'Désélectionner' : 'Sélectionner'}
+                          >
+                            {isSelected && (
+                              <svg className="w-3 h-3 mx-auto my-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                          <Link
+                            href={`/dashboard/servers/${candidate.server_id}`}
+                            className="flex-1 min-w-0"
+                          >
+                            <p className="text-sm font-medium text-gray-900 truncate">{candidate.name}</p>
+                            <p className="text-xs text-gray-500">
+                              {candidate.experience_years} ans • Niveau {candidate.main_skill_level}/10 • {candidate.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
+                            </p>
+                          </Link>
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="text-sm font-bold text-[#D4AF37]">{candidate.score?.toFixed(1) ?? '—'}</p>
+                          <p className="text-xs text-gray-500">
+                            {candidate.distance_km !== null && candidate.distance_km !== undefined
+                              ? `${candidate.distance_km.toFixed(1)} km`
+                              : '—'}
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-right ml-4">
-                        <p className="text-sm font-bold text-[#D4AF37]">{candidate.score?.toFixed(1) ?? '—'}</p>
-                        <p className="text-xs text-gray-500">
-                          {candidate.distance_km !== null && candidate.distance_km !== undefined
-                            ? `${candidate.distance_km.toFixed(1)} km`
-                            : '—'}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -207,15 +280,40 @@ export default function StaffRecommendationPanel({
                     Voir tous les candidats ({req.candidates.length})
                   </summary>
                   <div className="mt-2 space-y-1">
-                    {req.candidates.map((candidate) => (
-                      <div key={candidate.server_id} className="flex items-center justify-between text-xs px-2 py-1 bg-white rounded border border-gray-50">
-                        <span className="text-gray-700">{candidate.name}</span>
-                        <span className="text-gray-500">
-                          Score: {candidate.score?.toFixed(1) ?? '—'}
-                          {candidate.distance_km !== null && candidate.distance_km !== undefined && ` • ${candidate.distance_km.toFixed(1)} km`}
-                        </span>
-                      </div>
-                    ))}
+                    {req.candidates.map((candidate) => {
+                      const isSelected = selectedServers.has(candidate.server_id);
+                      const isAlreadySelected = req.selected.some(s => s.server_id === candidate.server_id);
+                      const canSelect = !isSelected && (selectedCount + manuallySelectedCount < requirement.quantity || isAlreadySelected);
+                      
+                      return (
+                        <div key={candidate.server_id} className={`flex items-center justify-between text-xs px-2 py-1 bg-white rounded border border-gray-50 ${isSelected ? 'bg-green-50 border-green-100' : ''}`}>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => !isAlreadySelected && toggleServerSelection(candidate.server_id, requirement.requirement_id)}
+                              disabled={!canSelect && !isSelected}
+                              className={`w-4 h-4 rounded border-2 flex-shrink-0 ${isSelected ? 'bg-[#D4AF37] border-[#D4AF37]' : 'border-gray-300'} text-white focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30 disabled:opacity-50 disabled:cursor-not-allowed`}
+                              aria-label={isSelected ? 'Désélectionner' : 'Sélectionner'}
+                            >
+                              {isSelected && (
+                                <svg className="w-3 h-3 mx-auto my-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </button>
+                            <Link
+                              href={`/dashboard/servers/${candidate.server_id}`}
+                              className="text-gray-700 hover:text-[#D4AF37] truncate"
+                            >
+                              {candidate.name}
+                            </Link>
+                          </div>
+                          <span className="text-gray-500">
+                            Score: {candidate.score?.toFixed(1) ?? '—'}
+                            {candidate.distance_km !== null && candidate.distance_km !== undefined && ` • ${candidate.distance_km.toFixed(1)} km`}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </details>
               )}
@@ -226,11 +324,16 @@ export default function StaffRecommendationPanel({
 
       <div className="mt-6 flex items-center justify-between">
         <p className="text-xs text-gray-400 italic">
-          Ces recommandations sont générées par le moteur de sélection. Aucune affectation n'a encore été enregistrée.
+          Ces recommandations sont générées par le moteur de sélection. Cliquez sur un serveur pour le sélectionner/désélectionner.
         </p>
         <button
           onClick={handleConfirmClick}
-          className="px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors"
+          disabled={totalSelected === 0}
+          className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+            totalSelected === 0
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-[#D4AF37] text-white hover:bg-[#B8941E]'
+          }`}
         >
           Confirmer l'équipe
         </button>

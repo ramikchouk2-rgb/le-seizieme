@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
 import { StaffAssignment, ASSIGNMENT_STATUSES } from '@/app/components/dashboard/types';
 
@@ -38,9 +39,12 @@ export default function StaffAssignmentDrawer({ assignment, onClose }: StaffAssi
               {assignment.first_name[0]}{assignment.last_name[0]}
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-gray-900">
+              <Link
+                href={`/dashboard/servers/${assignment.server_id}`}
+                className="text-lg font-semibold text-gray-900 hover:text-[#D4AF37] transition-colors"
+              >
                 {assignment.first_name} {assignment.last_name}
-              </h3>
+              </Link>
               <p className="text-sm text-gray-500">{assignment.city}</p>
             </div>
           </div>
