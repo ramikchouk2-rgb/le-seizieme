@@ -4,13 +4,14 @@ import { useMemo } from 'react';
 import { getCurrentUser } from '@/app/lib/api';
 
 const ROLE_LABELS: Record<string, string> = {
-  admin: 'Administrateur',
-  manager: 'Manager',
-  staff: 'Staff',
+  ADMIN: 'Administrateur',
+  MANAGER: 'Manager',
+  STAFF: 'Staff',
 };
 
 export default function Header({ title = 'Dashboard', action }: { title?: string; action?: React.ReactNode }) {
   const user = useMemo(() => getCurrentUser(), []);
+  const role = (user?.role || '').toUpperCase();
 
   return (
     <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-200">
@@ -35,7 +36,7 @@ export default function Header({ title = 'Dashboard', action }: { title?: string
             </div>
             <div className="hidden md:block">
               <p className="text-sm font-medium text-gray-900">{user?.email || 'Boss'}</p>
-              <p className="text-xs text-gray-500">{ROLE_LABELS[user?.role || 'admin'] || 'Administrateur'}</p>
+              <p className="text-xs text-gray-500">{ROLE_LABELS[role] || 'Utilisateur'}</p>
             </div>
           </div>
         </div>

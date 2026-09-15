@@ -16,6 +16,15 @@ class UrgentOfferResponse(BaseModel):
     reason: Optional[str] = None
 
 
+class UrgentWaveResponse(BaseModel):
+    wave_number: int
+    offers_sent: int
+    pending: int
+    accepted: int
+    declined: int
+    expired: int
+
+
 class UrgentStatusResponse(BaseModel):
     event_id: str
     is_urgent: bool
@@ -32,6 +41,7 @@ class UrgentStatusResponse(BaseModel):
     can_generate_next_wave: bool = False
     offers: list[UrgentOfferResponse] = []
     requirements: list[dict[str, Any]] = []
+    waves: list[UrgentWaveResponse] = []
 
 
 class UrgentGenerateResponse(BaseModel):

@@ -75,9 +75,10 @@ export interface EventStats {
   upcoming_events: number;
   planned_events: number;
   urgent_events: number;
-  in_progress_events: number;
-  completed_events: number;
-  total_events: number;
+  missing_positions: number;
+  in_progress_events?: number;
+  completed_events?: number;
+  total_events?: number;
 }
 
 export interface City {
@@ -687,6 +688,14 @@ export interface UrgentStatus {
     requested: number;
     accepted: number;
     remaining: number;
+  }[];
+  waves: {
+    wave_number: number;
+    offers_sent: number;
+    pending: number;
+    accepted: number;
+    declined: number;
+    expired: number;
   }[];
 }
 

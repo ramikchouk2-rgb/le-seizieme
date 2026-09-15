@@ -76,6 +76,7 @@ export function useEventStats() {
     queryKey: ['eventStats'],
     queryFn: getEventStats,
     staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -84,6 +85,7 @@ export function useUpcomingEvents(limit = 5) {
     queryKey: ['upcomingEvents', limit],
     queryFn: () => getUpcomingEvents(limit),
     staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -92,6 +94,7 @@ export function useUrgentEvents(limit = 5) {
     queryKey: ['urgentEvents', limit],
     queryFn: () => getUrgentEvents(limit),
     staleTime: 15 * 1000,
+    refetchInterval: 30 * 1000,
   });
 }
 
@@ -100,6 +103,7 @@ export function useTopServers(limit = 5) {
     queryKey: ['topServers', limit],
     queryFn: () => getTopServers(limit),
     staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -108,6 +112,7 @@ export function useRecentActivity(limit = 10) {
     queryKey: ['recentActivity', limit],
     queryFn: () => getRecentActivity(limit),
     staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -116,6 +121,7 @@ export function useServerStats() {
     queryKey: ['serverStats'],
     queryFn: getServerStats,
     staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -195,6 +201,8 @@ export function useMonthlyRankings(year: number, month: number) {
     queryKey: ['monthlyRankings', year, month],
     queryFn: () => getMonthlyRankings(year, month),
     enabled: year > 0 && month > 0,
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -203,6 +211,8 @@ export function useMonthlyBonuses(year: number, month: number) {
     queryKey: ['monthlyBonuses', year, month],
     queryFn: () => getMonthlyBonuses(year, month),
     enabled: year > 0 && month > 0,
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
   });
 }
 
@@ -598,6 +608,57 @@ export function useDeleteServerAvailability() {
       deleteServerAvailability(serverId, availabilityId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['serverAvailability', variables.serverId] });
+    },
+  });
+}
+
+export function useGenerateUrgentOffers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId: string) => generateUrgentOffers(eventId),
+    onSuccess: (_, eventId) => {
+      queryClient.invalidateQueries({ queryKey: ['urgentStatus', eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail', eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations', eventId] });
+    },
+  });
+}
+
+export function useAcceptUrgentOffer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, offerId }: { eventId: string; offerId: string }) =>
+      acceptUrgentOffer(eventId, offerId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['urgentStatus', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations', variables.eventId] });
+    },
+  });
+}
+
+export function useDeclineUrgentOffer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, offerId }: { eventId: string; offerId: string }) =>
+      declineUrgentOffer(eventId, offerId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['urgentStatus', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations', variables.eventId] });
+    },
+  });
+}
+
+export function useExpireUrgentOffer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, offerId }: { eventId: string; offerId: string }) =>
+      expireUrgentOffer(eventId, offerId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['urgentStatus', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations', variables.eventId] });
     },
   });
 }

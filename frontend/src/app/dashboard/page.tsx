@@ -1,37 +1,96 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import StatCard from '@/app/components/dashboard/StatCard';
+import type { EventOperationsResponse, UrgentStatus } from '@/app/lib/api';
+import OperationalKpis from '@/app/components/dashboard/OperationalKpis';
+import RequiredActions from '@/app/components/dashboard/RequiredActions';
+import GamificationSummary from '@/app/components/dashboard/GamificationSummary';
 import UpcomingEvents from '@/app/components/dashboard/UpcomingEvents';
-import StaffingAlert from '@/app/components/dashboard/StaffingAlert';
-import TopServers from '@/app/components/dashboard/TopServers';
 import UrgentEvents from '@/app/components/dashboard/UrgentEvents';
 import QuickActions from '@/app/components/dashboard/QuickActions';
 import RecentActivity from '@/app/components/dashboard/RecentActivity';
 import EventSelectorDialog from '@/app/components/dashboard/EventSelectorDialog';
-import { useEventStats, useUpcomingEvents, useUrgentEvents, useTopServers, useRecentActivity, useServerStats } from '@/app/lib/hooks';
-import { Spinner } from '@/app/lib/loading';
+import { useEventOperationsBatch, useUrgentStatusBatch } from '@/app/lib/operational-hooks';
+import { useEventStats, useUpcomingEvents, useUrgentEvents, useRecentActivity, useServerStats, useMonthlyRankings, useMonthlyBonuses } from '@/app/lib/hooks';
 
 export default function DashboardPage() {
   const router = useRouter();
   const [staffSelectorOpen, setStaffSelectorOpen] = useState(false);
   const [transportSelectorOpen, setTransportSelectorOpen] = useState(false);
   const [urgentSelectorOpen, setUrgentSelectorOpen] = useState(false);
+  const [now, setNow] = useState(() => new Date());
 
   const { data: eventStats, isLoading: eventStatsLoading, error: eventStatsError, refetch: refetchEventStats } = useEventStats();
-  const { data: upcomingEvents, isLoading: upcomingLoading, error: upcomingError } = useUpcomingEvents(5);
-  const { data: urgentEvents, isLoading: urgentLoading, error: urgentError } = useUrgentEvents(5);
-  const { data: topServers, isLoading: topServersLoading, error: topServersError } = useTopServers(5);
-  const { data: activities, isLoading: activitiesLoading, error: activitiesError } = useRecentActivity(10);
-  const { data: serverStats, isLoading: serverStatsLoading, error: serverStatsError } = useServerStats();
+  const { data: upcomingEvents, isLoading: upcomingLoading, error: upcomingError, refetch: refetchUpcomingEvents } = useUpcomingEvents(5);
+  const { data: urgentEventsData, isLoading: urgentLoading, error: urgentError, refetch: refetchUrgentEvents } = useUrgentEvents(5);
+  const { data: activities, isLoading: activitiesLoading, error: activitiesError, refetch: refetchActivities } = useRecentActivity(10);
+  const { data: serverStats, isLoading: serverStatsLoading, error: serverStatsError, refetch: refetchServerStats } = useServerStats();
 
-  const loading = eventStatsLoading || upcomingLoading || urgentLoading || topServersLoading || activitiesLoading || serverStatsLoading;
-  const error = eventStatsError?.message || upcomingError?.message || urgentError?.message || topServersError?.message || activitiesError?.message || serverStatsError?.message || null;
+  const upcomingEventIds = useMemo(() => (upcomingEvents?.items ?? []).map((event) => event.id), [upcomingEvents]);
+  const urgentEventIds = useMemo(() => (urgentEventsData?.items ?? []).map((event) => event.id), [urgentEventsData]);
+  const operationQueries = useEventOperationsBatch(upcomingEventIds);
+  const urgentStatusQueries = useUrgentStatusBatch(urgentEventIds);
 
-  const totalRequired = upcomingEvents?.items?.[0]?.staffing?.requested ?? 0;
-  const totalAssigned = upcomingEvents?.items?.[0]?.staffing?.selected ?? 0;
-  const remaining = totalRequired - totalAssigned;
+  const operations = operationQueries
+    .map((query) => query.data)
+    .filter((operation): operation is EventOperationsResponse => Boolean(operation));
+  const urgentStatuses = urgentStatusQueries
+    .map((query) => query.data)
+    .filter((status): status is UrgentStatus => Boolean(status));
+
+  const { data: ranking, isLoading: rankingLoading, error: rankingError, refetch: refetchRanking } = useMonthlyRankings(now.getFullYear(), now.getMonth() + 1);
+  const { data: bonuses, isLoading: bonusesLoading, error: bonusesError, refetch: refetchBonuses } = useMonthlyBonuses(now.getFullYear(), now.getMonth() + 1);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loading =
+    eventStatsLoading ||
+    upcomingLoading ||
+    urgentLoading ||
+    activitiesLoading ||
+    serverStatsLoading ||
+    operationQueries.some((query) => query.isLoading) ||
+    urgentStatusQueries.some((query) => query.isLoading) ||
+    rankingLoading ||
+    bonusesLoading;
+
+  const error =
+    eventStatsError?.message ||
+    upcomingError?.message ||
+    urgentError?.message ||
+    activitiesError?.message ||
+    serverStatsError?.message ||
+    operationQueries.find((query) => query.error)?.error?.message ||
+    urgentStatusQueries.find((query) => query.error)?.error?.message ||
+    rankingError?.message ||
+    bonusesError?.message ||
+    null;
+
+  const retryAll = () => {
+    refetchEventStats();
+    refetchUpcomingEvents();
+    refetchUrgentEvents();
+    refetchActivities();
+    refetchServerStats();
+    operationQueries.forEach((query) => query.refetch());
+    urgentStatusQueries.forEach((query) => query.refetch());
+    refetchRanking();
+    refetchBonuses();
+  };
+
+  const operationalKpis = {
+    upcomingEvents: eventStats?.upcoming_events ?? upcomingEvents?.total ?? 0,
+    urgentEvents: eventStats?.urgent_events ?? urgentEventsData?.total ?? 0,
+    missingPositions: eventStats?.missing_positions ?? operations.reduce((sum, operation) => sum + operation.staffing_summary.missing, 0),
+    availableServers: serverStats?.available ?? 0,
+    pendingOffers: urgentStatuses.reduce((sum, status) => sum + status.pending_count, 0),
+    confirmedAssignments: operations.reduce((sum, operation) => sum + operation.staffing_summary.confirmed, 0),
+    transportIssues: operations.reduce((sum, operation) => sum + operation.transport.unassigned_passengers, 0),
+  };
 
   const handleGenerateStaff = (event: { id: string }) => {
     setStaffSelectorOpen(false);
@@ -50,7 +109,6 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {/* Welcome Section */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Bonjour 👋</h1>
         <p className="text-gray-600 mt-2">Voici l'état actuel de votre équipe et de vos événements.</p>
@@ -59,48 +117,14 @@ export default function DashboardPage() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700 flex items-center justify-between">
           <span>{error}</span>
-          <button onClick={() => {
-            refetchEventStats();
-          }} className="underline font-medium">
+          <button onClick={retryAll} className="underline font-medium">
             Réessayer
           </button>
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Total serveurs"
-          value={serverStats?.total ?? 0}
-          subtitle="Inscrits dans le système"
-          icon="👥"
-          loading={serverStatsLoading}
-        />
-        <StatCard
-          title="Serveurs disponibles"
-          value={serverStats?.available ?? 0}
-          subtitle="Prêts à travailler"
-          icon="✅"
-          trend={{ value: 0, label: 'actuellement' }}
-          loading={serverStatsLoading}
-        />
-        <StatCard
-          title="Serveurs indisponibles"
-          value={serverStats?.unavailable ?? 0}
-          subtitle="En congé ou occupés"
-          icon="⛔"
-          loading={serverStatsLoading}
-        />
-        <StatCard
-          title="Avec véhicule"
-          value={serverStats?.with_vehicle ?? 0}
-          subtitle="Peut transporter collègues"
-          icon="🚗"
-          loading={serverStatsLoading}
-        />
-      </div>
+      <OperationalKpis {...operationalKpis} loading={loading} />
 
-      {/* Quick Actions */}
       <QuickActions
         actions={[
           { label: 'Créer un événement', icon: '➕', description: 'Nouvel événement', variant: 'primary', href: '/dashboard/events/new' },
@@ -111,37 +135,33 @@ export default function DashboardPage() {
         ]}
       />
 
-      {/* Upcoming Events */}
-      <UpcomingEvents events={upcomingEvents?.items ?? []} loading={upcomingLoading} />
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Staffing Alert */}
-        <StaffingAlert
-          required={totalRequired}
-          assigned={totalAssigned}
-          remaining={remaining}
-          roles={[]}
-          loading={upcomingLoading}
+        <RequiredActions
+          events={upcomingEvents?.items ?? []}
+          operations={operations}
+          urgentStatuses={urgentStatuses}
+          error={error}
+          onRetry={retryAll}
+          now={now}
         />
-
-        {/* Urgent Events */}
-        <UrgentEvents events={urgentEvents?.items ?? []} loading={urgentLoading} />
+        <GamificationSummary
+          ranking={ranking ?? null}
+          bonuses={bonuses ?? null}
+          loading={rankingLoading || bonusesLoading}
+          error={rankingError?.message || bonusesError?.message || null}
+          onRetry={() => {
+            refetchRanking();
+            refetchBonuses();
+          }}
+        />
       </div>
 
-      {/* Top Servers */}
-      <TopServers
-        rankings={topServers?.servers?.map((s) => ({
-          server_name: `${s.first_name} ${s.last_name}`,
-          total_points: s.monthly_points,
-          rank: s.rank,
-        })) ?? []}
-        loading={topServersLoading}
-      />
+      <UpcomingEvents events={upcomingEvents?.items ?? []} loading={upcomingLoading} />
 
-      {/* Recent Activity */}
+      <UrgentEvents events={urgentEventsData?.items ?? []} loading={urgentLoading} />
+
       <RecentActivity activities={activities ?? []} loading={activitiesLoading} />
 
-      {/* Event Selectors */}
       <EventSelectorDialog
         open={staffSelectorOpen}
         onClose={() => setStaffSelectorOpen(false)}

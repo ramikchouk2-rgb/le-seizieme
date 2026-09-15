@@ -1,29 +1,61 @@
 'use client';
 
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { UrgentOffer } from '@/app/lib/api';
 
 interface UrgentOfferCardProps {
   offer: UrgentOffer;
+  timeRemaining?: { expired: boolean; text: string } | null;
   onAccept?: (offer: UrgentOffer) => void;
   onDecline?: (offer: UrgentOffer) => void;
   onExpire?: (offer: UrgentOffer) => void;
 }
 
 const STATUS_CONFIG = {
-  PENDING: { label: 'En attente', className: 'bg-amber-50 text-amber-700 border-amber-200' },
-  ACCEPTED: { label: 'Acceptée', className: 'bg-green-50 text-green-700 border-green-200' },
-  DECLINED: { label: 'Refusée', className: 'bg-red-50 text-red-700 border-red-200' },
-  EXPIRED: { label: 'Expirée', className: 'bg-gray-50 text-gray-700 border-gray-200' },
+  PENDING: { label: 'EN ATTENTE', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  ACCEPTED: { label: 'ACCEPTÉE', className: 'bg-green-50 text-green-700 border-green-200' },
+  DECLINED: { label: 'REFUSÉE', className: 'bg-red-50 text-red-700 border-red-200' },
+  EXPIRED: { label: 'EXPIRÉE', className: 'bg-gray-50 text-gray-700 border-gray-200' },
 };
 
-export default function UrgentOfferCard({ offer, onAccept, onDecline, onExpire }: UrgentOfferCardProps) {
+export default function UrgentOfferCard({ offer, timeRemaining, onAccept, onDecline, onExpire }: UrgentOfferCardProps) {
   const statusConfig = STATUS_CONFIG[offer.status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.PENDING;
+  const [countdown, setCountdown] = useState<string>('');
+
+  useEffect(() => {
+    if (!timeRemaining || timeRemaining.expired) {
+      setCountdown(timeRemaining?.text || 'Expirée');
+      return;
+    }
+    setCountdown(timeRemaining.text);
+    const interval = setInterval(() => {
+      if (!offer.expires_at) return;
+      const now = new Date();
+      const expiry = new Date(offer.expires_at);
+      const diff = expiry.getTime() - now.getTime();
+      if (diff <= 0) {
+        setCountdown('Expirée');
+        clearInterval(interval);
+        return;
+      }
+      const minutes = Math.floor(diff / 60000);
+      const seconds = Math.floor((diff % 60000) / 1000);
+      setCountdown(minutes > 0 ? `${minutes} min ${seconds}s` : `${seconds}s`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [offer.expires_at, timeRemaining]);
 
   return (
     <div className="bg-white rounded-lg border border-gray-100 p-4 shadow-sm">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-gray-900">{offer.server_name}</span>
+          <Link
+            href={`/dashboard/servers/${offer.server_id}`}
+            className="text-sm font-semibold text-gray-900 hover:text-[#D4AF37] transition-colors"
+          >
+            {offer.server_name}
+          </Link>
           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${statusConfig.className}`}>
             {statusConfig.label}
           </span>
@@ -43,7 +75,9 @@ export default function UrgentOfferCard({ offer, onAccept, onDecline, onExpire }
           <p className="text-xs text-gray-500">Envoyée : {new Date(offer.created_at).toLocaleString('fr-FR')}</p>
         )}
         {offer.expires_at && (
-          <p className="text-xs text-gray-500">Expire : {new Date(offer.expires_at).toLocaleString('fr-FR')}</p>
+          <p className={`text-xs font-medium ${countdown === 'Expirée' ? 'text-red-600' : 'text-amber-600'}`}>
+            {countdown === 'Expirée' ? 'Expirée' : `Expire dans : ${countdown}`}
+          </p>
         )}
       </div>
 

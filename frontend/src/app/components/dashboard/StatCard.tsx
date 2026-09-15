@@ -1,10 +1,12 @@
 'use client';
 
+import type { ReactNode } from 'react';
+
 interface StatCardProps {
   title: string;
   value: string | number;
   subtitle?: string;
-  icon: string;
+  icon: ReactNode;
   trend?: {
     value: number;
     label: string;

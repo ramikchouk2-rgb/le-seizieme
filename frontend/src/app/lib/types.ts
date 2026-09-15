@@ -221,9 +221,14 @@ export interface ServerResponse {
   updated_at: string;
 }
 
+export type ActivityType =
+  | 'event_created'
+  | 'staff_assigned'
+  | 'points_awarded';
+
 export interface ActivityItem {
   id: string;
-  type: 'event_created' | 'staff_assigned' | 'points_awarded';
+  type: ActivityType;
   message: string;
   timestamp: string;
   event_id?: string;

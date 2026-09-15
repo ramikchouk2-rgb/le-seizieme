@@ -6,21 +6,23 @@ import { getCurrentUser } from '@/app/lib/api';
 import { logout } from '@/app/lib/api-client';
 
 const ROLE_LABELS: Record<string, string> = {
-  admin: 'Administrateur',
-  manager: 'Manager',
-  staff: 'Staff',
+  ADMIN: 'Administrateur',
+  MANAGER: 'Manager',
+  STAFF: 'Staff',
 };
 
 const menuItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: '🏠' },
-  { href: '/dashboard/servers', label: 'Serveurs', icon: '👥' },
-  { href: '/dashboard/events', label: 'Événements', icon: '📅' },
-  { href: '/dashboard/gamification', label: 'Gamification', icon: '🏆' },
+  { href: '/dashboard', label: 'Dashboard', icon: '🏠', managerOnly: true },
+  { href: '/dashboard/servers', label: 'Serveurs', icon: '👥', managerOnly: false },
+  { href: '/dashboard/events', label: 'Événements', icon: '📅', managerOnly: false },
+  { href: '/dashboard/gamification', label: 'Gamification', icon: '🏆', managerOnly: false },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const user = getCurrentUser();
+  const role = (user?.role || '').toUpperCase();
+  const visibleMenuItems = menuItems.filter((item) => !item.managerOnly || role === 'ADMIN' || role === 'MANAGER');
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0f0f0f] text-[#e5e5e5] flex flex-col z-50">
@@ -30,7 +32,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 overflow-y-auto sidebar-scroll p-4 space-y-1">
-        {menuItems.map((item) => {
+        {visibleMenuItems.map((item) => {
           const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname?.startsWith(item.href));
           return (
             <Link
@@ -56,7 +58,7 @@ export default function Sidebar() {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-white truncate">{user?.email || 'Boss'}</p>
-            <p className="text-xs text-gray-400 truncate">{ROLE_LABELS[user?.role || 'admin'] || 'Administrateur'}</p>
+            <p className="text-xs text-gray-400 truncate">{ROLE_LABELS[role] || 'Utilisateur'}</p>
           </div>
         </div>
         <button
