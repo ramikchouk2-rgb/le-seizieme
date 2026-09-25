@@ -17,6 +17,7 @@ venv/
 out/
 dist/
 build/
+frontend/tsconfig.tsbuildinfo
 
 # IDE
 .idea
@@ -42,6 +43,7 @@ lerna-debug.log*
 
 # Testing
 coverage
+frontend/test-results/
 
 # Misc
 *.pem
