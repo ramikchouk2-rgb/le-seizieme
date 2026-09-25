@@ -77,6 +77,21 @@ export interface ServerProfile {
     start_datetime: string;
     end_datetime: string;
     status: string;
+    note?: string | null;
+    conflict?: boolean;
+    conflict_reason?: string | null;
+  }[];
+  upcoming_events?: {
+    assignment_id: string;
+    event_id: string;
+    event_name: string;
+    start_datetime: string;
+    end_datetime: string;
+    event_status: string;
+    assignment_status: string;
+    role: string;
+    conflict?: boolean;
+    conflict_reason?: string | null;
   }[];
   points: {
     total_points: number;
@@ -121,7 +136,9 @@ export interface ServerAvailability {
   start_datetime: string;
   end_datetime: string;
   status: string;
-  note?: string;
+  note?: string | null;
+  conflict?: boolean;
+  conflict_reason?: string | null;
 }
 
 export interface ServerLocation {
@@ -224,7 +241,10 @@ export interface ServerResponse {
 export type ActivityType =
   | 'event_created'
   | 'staff_assigned'
-  | 'points_awarded';
+  | 'transport_created'
+  | 'urgent_offer'
+  | 'points_awarded'
+  | 'ranking_calculated';
 
 export interface ActivityItem {
   id: string;
@@ -287,7 +307,6 @@ export interface EventDetailData {
     food_products_count: number;
     priority: string;
     urgent: boolean;
-    is_urgent: boolean;
     required_response_minutes: number | null;
     status: string;
     notes: string | null;
@@ -315,6 +334,8 @@ export interface EventDetailData {
     availability_status: string;
     status: 'PROPOSED' | 'CONFIRMED' | 'DECLINED' | 'CANCELLED' | 'COMPLETED';
     reasons: string[];
+    conflict?: boolean;
+    conflict_reason?: string | null;
   }[];
   requirements_detail: {
     requirement_id: string;

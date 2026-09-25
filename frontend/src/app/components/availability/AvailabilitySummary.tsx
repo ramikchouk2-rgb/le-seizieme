@@ -1,5 +1,7 @@
 'use client';
 
+import { parseBackendDateTime } from '@/app/lib/datetime';
+
 interface AvailabilitySummaryProps {
   items: {
     id: string;
@@ -12,14 +14,18 @@ interface AvailabilitySummaryProps {
 }
 
 export default function AvailabilitySummary({ items }: AvailabilitySummaryProps) {
-  const upcoming = items.filter((item) => new Date(item.end_datetime) >= new Date());
+  const upcoming = items.filter((item) => {
+    const endDate = parseBackendDateTime(item.end_datetime);
+    return endDate && endDate >= new Date();
+  });
   const conflicts = items.filter((item) => item.conflict);
   const availableHours = upcoming
     .filter((item) => item.status === 'AVAILABLE')
     .reduce((acc, item) => {
-      const start = new Date(item.start_datetime).getTime();
-      const end = new Date(item.end_datetime).getTime();
-      return acc + (end - start) / (1000 * 60 * 60);
+      const start = parseBackendDateTime(item.start_datetime);
+      const end = parseBackendDateTime(item.end_datetime);
+      if (!start || !end) return acc;
+      return acc + (end.getTime() - start.getTime()) / (1000 * 60 * 60);
     }, 0);
 
   return (

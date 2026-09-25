@@ -93,6 +93,8 @@ export interface StaffAssignment {
   availability_status: string;
   status: 'PROPOSED' | 'CONFIRMED' | 'DECLINED' | 'CANCELLED' | 'COMPLETED';
   reasons: string[];
+  conflict?: boolean;
+  conflict_reason?: string | null;
 }
 
 export interface EventDetailData {

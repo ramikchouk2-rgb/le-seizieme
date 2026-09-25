@@ -2,6 +2,7 @@
 
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
 import { ServerListItem, ServerProfile } from '@/app/lib/api';
+import { parseBackendDateTime } from '@/app/lib/datetime';
 import Link from 'next/link';
 
 interface ServerDrawerProps {
@@ -181,16 +182,22 @@ export default function ServerDrawer({ server, profile, loading, onClose }: Serv
           <div className="mb-6">
             <p className={SECTION}>Disponibilités à venir</p>
             <div className="space-y-2">
-              {profile.availability.slice(0, 3).map((slot: { id: string; start_datetime: string; end_datetime: string; status: string }) => (
-                <div key={slot.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                  <span className="text-sm text-gray-700">
-                    {new Date(slot.start_datetime).toLocaleDateString('fr-FR')} — {new Date(slot.end_datetime).toLocaleDateString('fr-FR')}
-                  </span>
-                  <span className={`text-xs font-medium ${slot.status === 'AVAILABLE' ? 'text-green-600' : 'text-red-600'}`}>
-                    {slot.status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
-                  </span>
-                </div>
-              ))}
+              {profile.availability
+                .filter((slot: { start_datetime: string; end_datetime: string; status: string }) => {
+                  const endDate = parseBackendDateTime(slot.end_datetime);
+                  return endDate && endDate.getTime() >= Date.now();
+                })
+                .slice(0, 3)
+                .map((slot: { id: string; start_datetime: string; end_datetime: string; status: string }) => (
+                  <div key={slot.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                    <span className="text-sm text-gray-700">
+                      {parseBackendDateTime(slot.start_datetime)?.toLocaleDateString('fr-FR') ?? slot.start_datetime} — {parseBackendDateTime(slot.end_datetime)?.toLocaleDateString('fr-FR') ?? slot.end_datetime}
+                    </span>
+                    <span className={`text-xs font-medium ${slot.status === 'AVAILABLE' ? 'text-green-600' : 'text-red-600'}`}>
+                      {slot.status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
+                    </span>
+                  </div>
+                ))}
             </div>
             {server && (
               <Link

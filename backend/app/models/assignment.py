@@ -72,6 +72,8 @@ class StaffAssignmentResponse(BaseModel):
     event_id: str
     server_id: str
     server_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     role: str
     status: str
     assigned_at: str
@@ -84,6 +86,8 @@ class StaffAssignmentResponse(BaseModel):
     gender: Optional[str] = None
     city: Optional[str] = None
     requirement_id: Optional[str] = None
+    conflict: Optional[bool] = None
+    conflict_reason: Optional[str] = None
 
 
 class EligibleStaffResponse(BaseModel):
@@ -98,3 +102,5 @@ class EligibleStaffResponse(BaseModel):
     distance_km: Optional[float] = None
     requirement_id: Optional[str] = None
     role: Optional[str] = None
+    conflict: Optional[bool] = None
+    conflict_reason: Optional[str] = None

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Header from '@/app/components/dashboard/Header';
@@ -13,8 +13,6 @@ import DeleteAvailabilityDialog from '@/app/components/availability/DeleteAvaila
 import { useServerAvailability, useCreateServerAvailability, useUpdateServerAvailability, useDeleteServerAvailability } from '@/app/lib/hooks';
 import { Spinner } from '@/app/lib/loading';
 import { useAnnouncer } from '@/app/components/ui/Announcer';
-
-type LoadingState = 'loading' | 'error' | 'success';
 
 const STATUS_STYLES: Record<string, string> = {
   AVAILABLE: 'bg-green-50 text-green-700 border-green-200',
@@ -30,7 +28,6 @@ export default function ServerAvailabilityPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState<{ id: string; start_datetime: string; end_datetime: string; status: string; note?: string | null } | null>(null);
   const [deletingItem, setDeletingItem] = useState<{ id: string; start_datetime: string; end_datetime: string; status: string } | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const { data: availabilityData, isLoading, error, refetch } = useServerAvailability(serverId);
   const createMutation = useCreateServerAvailability();
@@ -87,34 +84,36 @@ export default function ServerAvailabilityPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              {isLoading ? (
-                <div className="bg-white rounded-xl border border-gray-200 p-12 text-center shadow-sm">
-                  <Spinner size="lg" className="mx-auto mb-4 text-[#D4AF37]" />
-                  <p className="text-gray-500 text-sm">Chargement des disponibilités...</p>
-                </div>
-              ) : (
-                <AvailabilityList
-                  items={items}
-                  onEdit={setEditingItem}
-                  onDelete={setDeletingItem}
-                  statusStyles={STATUS_STYLES}
-                />
-              )}
-            </div>
+          {!error && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2">
+                {isLoading ? (
+                  <div className="bg-white rounded-xl border border-gray-200 p-12 text-center shadow-sm">
+                    <Spinner size="lg" className="mx-auto mb-4 text-[#D4AF37]" />
+                    <p className="text-gray-500 text-sm">Chargement des disponibilités...</p>
+                  </div>
+                ) : (
+                  <AvailabilityList
+                    items={items}
+                    onEdit={setEditingItem}
+                    onDelete={setDeletingItem}
+                    statusStyles={STATUS_STYLES}
+                  />
+                )}
+              </div>
 
-            <div className="space-y-6">
-              <AvailabilitySummary items={items} />
-              <AvailabilityCalendar items={items} />
-              <button
-                onClick={() => setShowForm(true)}
-                className="w-full inline-flex items-center justify-center px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors"
-              >
-                + Nouvelle disponibilité
-              </button>
+              <div className="space-y-6">
+                <AvailabilitySummary items={items} />
+                <AvailabilityCalendar items={items} />
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="w-full inline-flex items-center justify-center px-4 py-2 bg-[#D4AF37] text-white text-sm font-medium rounded-lg hover:bg-[#B8941E] transition-colors"
+                >
+                  + Nouvelle disponibilité
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {showForm && (
             <AvailabilityForm

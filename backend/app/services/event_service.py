@@ -6,9 +6,21 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.core.database import get_pool
-from app.utils.datetime_utils import now_naive_utc
+from app.utils.datetime_utils import now_naive_utc, to_naive_utc
 from app.utils.selection_utils import compute_candidate_score
+from app.services.availability_service import get_event_scheduling_conflict
 from app.services.selection_engine import haversine_km, normalize_text, serialize_row
+
+
+def _normalize_datetime(value: Any) -> datetime | None:
+    try:
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            parsed = value
+        return to_naive_utc(parsed)
+    except (ValueError, TypeError):
+        return None
 
 
 async def load_event_detail(event_id: str) -> dict[str, Any] | None:
@@ -62,6 +74,17 @@ async def load_event_requirements_with_counts(event_id: str) -> list[dict[str, A
 async def load_event_staff_assignments(event_id: str) -> list[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
+        event_row = await conn.fetchrow(
+            "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
+            event_id,
+        )
+        if not event_row:
+            return []
+
+        event_start = _normalize_datetime(event_row["start_datetime"])
+        event_end = _normalize_datetime(event_row["end_datetime"])
+        if event_start is None or event_end is None:
+            return []
         rows = await conn.fetch(
             """
             SELECT es.id, es.server_id, s.first_name, s.last_name, s.gender,
@@ -75,18 +98,29 @@ async def load_event_staff_assignments(event_id: str) -> list[dict[str, Any]]:
             JOIN cities c ON s.city_id = c.id
             LEFT JOIN server_profile sp ON s.id = sp.server_id
             LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= (
-                    SELECT start_datetime FROM events WHERE id = $1
-                )
-                AND sa.end_datetime >= (
-                    SELECT end_datetime FROM events WHERE id = $1
-                )
+                AND sa.start_datetime <= $2
+                AND sa.end_datetime >= $3
             WHERE es.event_id = $1
             ORDER BY es.assigned_at ASC
             """,
             event_id,
+            event_start,
+            event_end,
         )
-        return [serialize_row(dict(r)) for r in rows]
+        result = []
+        for r in rows:
+            item = serialize_row(dict(r))
+            item.update(
+                await get_event_scheduling_conflict(
+                    conn,
+                    str(r["server_id"]),
+                    event_start,
+                    event_end,
+                    event_id,
+                )
+            )
+            result.append(item)
+        return result
 
 
 async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
@@ -119,12 +153,11 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
         total_missing = total_requested - total_selected
         percentage = round((total_selected / total_requested) * 100) if total_requested > 0 else 0
 
-        event_start = event["start_datetime"]
-        event_end = event["end_datetime"]
-        if isinstance(event_start, datetime):
-            event_start = event_start.isoformat()
-        if isinstance(event_end, datetime):
-            event_end = event_end.isoformat()
+        event_start = _normalize_datetime(event["start_datetime"])
+        event_end = _normalize_datetime(event["end_datetime"])
+        if event_start is None or event_end is None:
+            event_start = None
+            event_end = None
 
         event_lat = settings.DEFAULT_EVENT_LATITUDE
         event_lon = settings.DEFAULT_EVENT_LONGITUDE
@@ -179,8 +212,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 score, reasons = compute_candidate_score(
                     candidate=candidate,
                     requirement=req_for_score,
-                    event_start=datetime.fromisoformat(event_start.replace("Z", "+00:00")) if isinstance(event_start, str) else event_start,
-                    event_end=datetime.fromisoformat(event_end.replace("Z", "+00:00")) if isinstance(event_end, str) else event_end,
+                    event_start=event_start,
+                    event_end=event_end,
                     event_lat=event_lat,
                     event_lon=event_lon,
                     min_assignments=0,
@@ -194,6 +227,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "id": a["id"],
                 "server_id": a["server_id"],
                 "server_name": f"{a['first_name']} {a['last_name']}",
+                "first_name": a["first_name"],
+                "last_name": a["last_name"],
                 "gender": a["gender"],
                 "city": a["city"],
                 "role": a["role"],
@@ -205,6 +240,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "availability_status": a["availability_status"] or "AVAILABLE",
                 "status": a["assignment_status"],
                 "reasons": reasons,
+                "conflict": a.get("conflict", False),
+                "conflict_reason": a.get("conflict_reason"),
             })
 
         transport_groups_raw = await conn.fetch(
@@ -264,8 +301,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "city_id": str(event.get("city_id")) if event.get("city_id") else None,
                 "city": city_name,
                 "address": event.get("address"),
-                "start_datetime": event_start,
-                "end_datetime": event_end,
+                "start_datetime": event_start.isoformat() if event_start is not None else None,
+                "end_datetime": event_end.isoformat() if event_end is not None else None,
                 "guest_count": event["guest_count"],
                 "event_type": event.get("event_type"),
                 "alcohol_service": event["alcohol_service"],
@@ -417,8 +454,10 @@ async def confirm_staff_assignments(
                     "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
                     event_id,
                 )
-                event_start = event_start_row["start_datetime"]
-                event_end = event_start_row["end_datetime"]
+                event_start = _normalize_datetime(event_start_row["start_datetime"])
+                event_end = _normalize_datetime(event_start_row["end_datetime"])
+                if event_start is None or event_end is None:
+                    raise HTTPException(status_code=500, detail="Dates de l'événement invalides.")
 
                 avail_row = await conn.fetchrow(
                     """
@@ -532,8 +571,10 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                     detail="L'événement ne peut pas recevoir de transport dans son état actuel.",
                 )
 
-            event_start = event_row["start_datetime"]
-            event_end = event_row["end_datetime"]
+            event_start = _normalize_datetime(event_row["start_datetime"])
+            event_end = _normalize_datetime(event_row["end_datetime"])
+            if event_start is None or event_end is None:
+                raise HTTPException(status_code=500, detail="Dates de l'événement invalides.")
 
             driver_ids = [g["driver_server_id"] for g in groups]
             passenger_ids = []
@@ -1074,8 +1115,10 @@ async def load_event_stats() -> dict[str, int]:
 async def create_event(data: dict[str, Any]) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        start_datetime = datetime.fromisoformat(data["start_datetime"].replace("Z", "+00:00")) if isinstance(data["start_datetime"], str) else data["start_datetime"]
-        end_datetime = datetime.fromisoformat(data["end_datetime"].replace("Z", "+00:00")) if isinstance(data["end_datetime"], str) else data["end_datetime"]
+        start_datetime = _normalize_datetime(data["start_datetime"])
+        end_datetime = _normalize_datetime(data["end_datetime"])
+        if start_datetime is None or end_datetime is None:
+            raise HTTPException(status_code=422, detail="Les dates de l'événement sont invalides.")
 
         row = await conn.fetchrow(
             """
@@ -1116,21 +1159,31 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         event_row = await conn.fetchrow(
-            "SELECT id FROM events WHERE id = $1",
+            "SELECT id, start_datetime, end_datetime FROM events WHERE id = $1",
             event_id,
         )
         if not event_row:
             raise HTTPException(status_code=404, detail="Événement introuvable.")
 
+        existing_start = _normalize_datetime(event_row["start_datetime"])
+        existing_end = _normalize_datetime(event_row["end_datetime"])
+        if existing_start is None or existing_end is None:
+            raise HTTPException(status_code=500, detail="Dates actuelles de l'événement invalides.")
+
+        start_datetime = _normalize_datetime(data.get("start_datetime")) if "start_datetime" in data else None
+        end_datetime = _normalize_datetime(data.get("end_datetime")) if "end_datetime" in data else None
+
+        if "start_datetime" in data and (data["start_datetime"] is None or start_datetime is None):
+            raise HTTPException(status_code=422, detail="La date de début est invalide.")
+        if "end_datetime" in data and (data["end_datetime"] is None or end_datetime is None):
+            raise HTTPException(status_code=422, detail="La date de fin est invalide.")
+
         # Validate datetime if provided
         if "start_datetime" in data or "end_datetime" in data:
-            start = data.get("start_datetime")
-            end = data.get("end_datetime")
-            if start and end:
-                start_dt = datetime.fromisoformat(start.replace("Z", "+00:00")) if isinstance(start, str) else start
-                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00")) if isinstance(end, str) else end
-                if end_dt <= start_dt:
-                    raise HTTPException(status_code=422, detail="La date de fin doit être postérieure à la date de début.")
+            start = start_datetime if "start_datetime" in data else existing_start
+            end = end_datetime if "end_datetime" in data else existing_end
+            if start is not None and end is not None and end <= start:
+                raise HTTPException(status_code=422, detail="La date de fin doit être postérieure à la date de début.")
 
         # Validate guest_count if provided
         if "guest_count" in data and data["guest_count"] is not None and data["guest_count"] < 1:
@@ -1149,9 +1202,16 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
         values = []
         idx = 1
         for field in allowed_fields:
-            if field in data and data[field] is not None:
+            if field not in data:
+                continue
+            value = data[field]
+            if field == "start_datetime":
+                value = start_datetime
+            elif field == "end_datetime":
+                value = end_datetime
+            if value is not None:
                 updates.append(f"{field} = ${idx}")
-                values.append(data[field])
+                values.append(value)
                 idx += 1
 
         if not updates:
@@ -1483,8 +1543,10 @@ async def add_staff_assignment(event_id: str, payload: dict[str, Any]) -> dict[s
                 "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
                 event_id,
             )
-            event_start = event_start_row["start_datetime"]
-            event_end = event_start_row["end_datetime"]
+            event_start = _normalize_datetime(event_start_row["start_datetime"])
+            event_end = _normalize_datetime(event_start_row["end_datetime"])
+            if event_start is None or event_end is None:
+                raise HTTPException(status_code=500, detail="Dates de l'événement invalides.")
 
             avail_row = await conn.fetchrow(
                 """
@@ -1545,6 +1607,8 @@ async def add_staff_assignment(event_id: str, payload: dict[str, Any]) -> dict[s
             )
             result = serialize_row(dict(row))
             result["server_name"] = f"{server_row['first_name']} {server_row['last_name']}".strip()
+            result["first_name"] = server_row["first_name"]
+            result["last_name"] = server_row["last_name"]
             result["gender"] = server_row["gender"]
             result["city"] = ""
             result["score"] = None
@@ -1732,9 +1796,15 @@ async def update_staff_assignment(event_id: str, assignment_id: str, payload: di
                 assignment_id,
                 event_id,
             )
+            server_row = await conn.fetchrow(
+                "SELECT first_name, last_name, gender FROM servers WHERE id = $1",
+                updated_row["server_id"],
+            )
             result = serialize_row(dict(updated_row))
-            result["server_name"] = ""
-            result["gender"] = None
+            result["server_name"] = f"{server_row['first_name']} {server_row['last_name']}".strip() if server_row else ""
+            result["first_name"] = server_row["first_name"] if server_row else None
+            result["last_name"] = server_row["last_name"] if server_row else None
+            result["gender"] = server_row["gender"] if server_row else None
             result["city"] = None
             result["score"] = None
             result["distance_km"] = None
@@ -1755,8 +1825,10 @@ async def get_eligible_staff(event_id: str, search: str | None = None, role: str
         if not event_row:
             raise HTTPException(status_code=404, detail="Événement introuvable.")
 
-        event_start = event_row["start_datetime"]
-        event_end = event_row["end_datetime"]
+        event_start = _normalize_datetime(event_row["start_datetime"])
+        event_end = _normalize_datetime(event_row["end_datetime"])
+        if event_start is None or event_end is None:
+            raise HTTPException(status_code=500, detail="Dates de l'événement invalides.")
 
         requirements = await conn.fetch(
             """
@@ -1866,6 +1938,13 @@ async def get_eligible_staff(event_id: str, search: str | None = None, role: str
             if not eligible:
                 continue
 
+            conflict = await get_event_scheduling_conflict(
+                conn,
+                server_id,
+                event_start,
+                event_end,
+                event_id,
+            )
             result.append({
                 "server_id": str(server_id),
                 "server_name": f"{r['first_name']} {r['last_name']}".strip(),
@@ -1876,9 +1955,10 @@ async def get_eligible_staff(event_id: str, search: str | None = None, role: str
                 "availability_status": r["availability_status"],
                 "score": None,
                 "distance_km": None,
-                 "requirement_id": matched_req["id"] if matched_req else None,
-                 "role": matched_role or (target_roles[0] if target_roles else ""),
-             })
+                "requirement_id": matched_req["id"] if matched_req else None,
+                "role": matched_role or (target_roles[0] if target_roles else ""),
+                **conflict,
+            })
 
         return result
 
@@ -1983,19 +2063,13 @@ async def get_event_operations(event_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Événement introuvable.")
 
         event = serialize_row(dict(event_row))
-        event_start = event["start_datetime"]
-        event_end = event["end_datetime"]
-        if isinstance(event_start, datetime):
-            event_start = event_start.isoformat()
-        if isinstance(event_end, datetime):
-            event_end = event_end.isoformat()
+        event_start = _normalize_datetime(event["start_datetime"])
+        event_end = _normalize_datetime(event["end_datetime"])
 
         duration_minutes = None
-        if event_start and event_end:
+        if event_start is not None and event_end is not None:
             try:
-                start_dt = datetime.fromisoformat(event_start.replace("Z", "+00:00"))
-                end_dt = datetime.fromisoformat(event_end.replace("Z", "+00:00"))
-                duration_minutes = int((end_dt - start_dt).total_seconds() / 60)
+                duration_minutes = int((event_end - event_start).total_seconds() / 60)
             except Exception:
                 duration_minutes = None
 
@@ -2237,7 +2311,7 @@ async def get_event_operations(event_id: str) -> dict[str, Any]:
             "event_name": event["name"],
             "status": event["status"],
             "city": event["city"],
-            "date": event_start.split("T")[0] if event_start and "T" in event_start else event_start,
+            "date": event_start.strftime("%Y-%m-%d") if event_start is not None else (event["start_datetime"].split("T")[0] if isinstance(event["start_datetime"], str) and "T" in event["start_datetime"] else event["start_datetime"]),
             "guest_count": event["guest_count"],
             "duration_minutes": duration_minutes,
             "attendance_available": True,

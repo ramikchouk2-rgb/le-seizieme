@@ -204,9 +204,14 @@ export default function StaffAssignmentTable({
                 <td className="px-4 py-3 whitespace-nowrap">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
                     assignment.availability_status === 'AVAILABLE' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'
-                  }`}>
+                  }`} title={assignment.conflict_reason || undefined}>
                     {assignment.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
                   </span>
+                  {assignment.conflict && (
+                    <span className="mt-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200" title={assignment.conflict_reason || undefined}>
+                      Conflit
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_STYLES[assignment.status] || 'bg-gray-50 text-gray-700'}`}>

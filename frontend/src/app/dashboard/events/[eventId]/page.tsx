@@ -388,7 +388,7 @@ export default function EventDetailPage() {
                 </div>
               )}
 
-              <UrgentStaffingPanel eventId={eventId} eventUrgent={event.urgent} />
+                <UrgentStaffingPanel eventId={eventId} eventUrgent={event.urgent} />
 
               <GamificationPanel />
             </div>

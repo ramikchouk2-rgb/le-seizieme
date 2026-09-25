@@ -6,6 +6,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.database import get_pool
+from app.utils.datetime_utils import to_naive_utc
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -65,6 +66,16 @@ async def load_skill_map() -> dict[str, str]:
 async def load_servers_with_details(event_id: str) -> list[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
+        event_row = await conn.fetchrow(
+            "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
+            event_id,
+        )
+        if not event_row:
+            return []
+        event_start = to_naive_utc(event_row["start_datetime"])
+        event_end = to_naive_utc(event_row["end_datetime"])
+        if event_start is None or event_end is None:
+            return []
         rows = await conn.fetch(
             """
             SELECT
@@ -88,7 +99,9 @@ async def load_servers_with_details(event_id: str) -> list[dict[str, Any]]:
                 sa.status AS availability_status,
                 sa.start_datetime AS availability_start,
                 sa.end_datetime AS availability_end,
-                ev.recent_assignments
+                ev.recent_assignments,
+                conflict.name AS conflict_event_name,
+                conflict.start_datetime AS conflict_event_start
             FROM servers s
             JOIN cities c ON s.city_id = c.id
             LEFT JOIN server_locations sl ON s.id = sl.server_id AND sl.is_current = TRUE
@@ -101,12 +114,44 @@ async def load_servers_with_details(event_id: str) -> list[dict[str, Any]]:
             ) ev ON TRUE
             LEFT JOIN server_availability sa ON s.id = sa.server_id
                 AND sa.start_datetime <= $1
-                AND sa.end_datetime >= $1
+                AND sa.end_datetime >= $2
+            LEFT JOIN LATERAL (
+                SELECT e.name, e.start_datetime
+                FROM event_staff es
+                JOIN events e ON e.id = es.event_id
+                WHERE es.server_id = s.id
+                  AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
+                  AND e.start_datetime < $2
+                  AND e.end_datetime > $1
+                  AND e.id <> $3
+                ORDER BY e.start_datetime ASC
+                LIMIT 1
+            ) conflict ON TRUE
             WHERE s.is_active = TRUE
             """,
-            datetime.now(timezone.utc).replace(tzinfo=None),
+            event_start,
+            event_end,
+            event_id,
         )
-        return [serialize_row(dict(r)) for r in rows]
+        result = []
+        for r in rows:
+            item = serialize_row(dict(r))
+            conflict_event_name = item.pop("conflict_event_name", None)
+            conflict_event_start = item.pop("conflict_event_start", None)
+            if conflict_event_name:
+                item["conflict"] = True
+                item["conflict_reason"] = f"Conflit avec l'événement « {conflict_event_name} »."
+                if conflict_event_start:
+                    try:
+                        conflict_date = datetime.fromisoformat(conflict_event_start.replace("Z", "+00:00"))
+                        item["conflict_reason"] += f" ({conflict_date.strftime('%d/%m/%Y %H:%M')})."
+                    except (ValueError, TypeError):
+                        pass
+            else:
+                item["conflict"] = False
+                item["conflict_reason"] = None
+            result.append(item)
+        return result
 
 
 async def load_server_skills(server_ids: list[str]) -> dict[str, list[dict[str, Any]]]:

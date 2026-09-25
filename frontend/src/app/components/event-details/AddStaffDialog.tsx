@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AddStaffAssignmentRequest, getEligibleStaff, EligibleStaffResponse } from '@/app/lib/api';
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
 
@@ -28,6 +28,7 @@ export default function AddStaffDialog({ eventId, onClose, onSave, requirements,
   const [loadingStaff, setLoadingStaff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedServer, setSelectedServer] = useState<EligibleStaffResponse | null>(null);
+  const requestRef = useRef(0);
 
   const containerRef = useFocusTrap({ onClose, closeOnEscape: true, restoreFocus: true });
 
@@ -35,9 +36,13 @@ export default function AddStaffDialog({ eventId, onClose, onSave, requirements,
   const remainingSpots = selectedRequirement ? selectedRequirement.quantity - selectedRequirement.selected : 0;
 
   useEffect(() => {
+    const requestId = ++requestRef.current;
+    let active = true;
+
     async function loadEligible() {
       if (!selectedRequirementId) {
         setEligibleStaff([]);
+        setLoadingStaff(false);
         return;
       }
       setLoadingStaff(true);
@@ -48,15 +53,26 @@ export default function AddStaffDialog({ eventId, onClose, onSave, requirements,
           search || undefined,
           selectedRequirement?.role_name || undefined,
         );
+        if (!active || requestId !== requestRef.current) return;
         setEligibleStaff(data);
       } catch {
+        if (!active || requestId !== requestRef.current) return;
         setError('Impossible de charger les serveurs éligibles.');
         setEligibleStaff([]);
       } finally {
-        setLoadingStaff(false);
+        if (active && requestId === requestRef.current) {
+          setLoadingStaff(false);
+        }
       }
     }
     loadEligible();
+
+    return () => {
+      active = false;
+      if (requestRef.current === requestId) {
+        requestRef.current += 1;
+      }
+    };
   }, [selectedRequirementId, search, eventId, selectedRequirement?.role_name]);
 
   const handleSubmit = async () => {
@@ -155,13 +171,20 @@ export default function AddStaffDialog({ eventId, onClose, onSave, requirements,
                               {staff.city} • {staff.years_experience} ans • Niveau {staff.skill_level}/10
                             </p>
                           </div>
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
-                            staff.availability_status === 'AVAILABLE'
-                              ? 'bg-green-50 text-green-700 border-green-200'
-                              : 'bg-red-50 text-red-700 border-red-200'
-                          }`}>
-                            {staff.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
-                          </span>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
+                              staff.availability_status === 'AVAILABLE'
+                                ? 'bg-green-50 text-green-700 border-green-200'
+                                : 'bg-red-50 text-red-700 border-red-200'
+                            }`} title={staff.conflict_reason || undefined}>
+                              {staff.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
+                            </span>
+                            {staff.conflict && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200" title={staff.conflict_reason || undefined}>
+                                Conflit
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}

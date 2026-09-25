@@ -78,6 +78,13 @@ export default function StaffAssignmentDrawer({ assignment, onClose }: StaffAssi
             </div>
           </div>
 
+          {assignment.conflict && (
+            <div className="mb-6 rounded-lg border border-orange-200 bg-orange-50 p-3">
+              <p className="text-sm font-semibold text-orange-800">Conflit de planning</p>
+              <p className="mt-1 text-xs text-orange-700">{assignment.conflict_reason || 'Un conflit de planning a été détecté.'}</p>
+            </div>
+          )}
+
           <div className="mb-6">
             <p className={SECTION}>Statut</p>
             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${

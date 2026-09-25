@@ -191,6 +191,8 @@ export interface StaffRecommendationResponse {
       score: number | null;
       reasons: string[];
       exclusion_reason?: string | null;
+      conflict?: boolean;
+      conflict_reason?: string | null;
     }[];
     selected: {
       server_id: string;
@@ -205,6 +207,8 @@ export interface StaffRecommendationResponse {
       score: number | null;
       reasons: string[];
       exclusion_reason?: string | null;
+      conflict?: boolean;
+      conflict_reason?: string | null;
     }[];
     status: string;
     message: string | null;
@@ -277,7 +281,7 @@ export interface ConfirmStaffAssignmentRequest {
 
 export interface ConfirmStaffAssignmentResponse {
   server_id: string;
-  server_name: string;
+  server_name?: string;
   role: string;
 }
 
@@ -345,6 +349,8 @@ export interface StaffAssignmentResponse {
   gender?: string;
   city?: string;
   requirement_id?: string;
+  conflict?: boolean;
+  conflict_reason?: string | null;
 }
 
 export interface EligibleStaffResponse {
@@ -359,6 +365,8 @@ export interface EligibleStaffResponse {
   distance_km?: number;
   requirement_id?: string;
   role?: string;
+  conflict?: boolean;
+  conflict_reason?: string | null;
 }
 
 export interface EventStatusUpdateRequest {
@@ -716,8 +724,8 @@ export interface UrgentGenerateResponse {
 export interface UrgentActionResponse {
   success: boolean;
   message: string;
-  offer: UrgentOffer | null;
-  urgent_status: UrgentStatus;
+  offer: Partial<UrgentOffer> | null | undefined;
+  urgent_status?: UrgentStatus;
 }
 
 export interface GamificationRankingItem {

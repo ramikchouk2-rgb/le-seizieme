@@ -226,7 +226,7 @@ export function useServerPoints(serverId: string) {
 
 export function useServer(serverId: string) {
   return useQuery({
-    queryKey: ['server', serverId],
+    queryKey: ['serverDetail', serverId],
     queryFn: () => getServer(serverId),
     enabled: !!serverId,
   });
@@ -304,6 +304,7 @@ export function useCreateServer() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['servers'] });
       queryClient.invalidateQueries({ queryKey: ['serverStats'] });
+      queryClient.invalidateQueries({ queryKey: ['serverDetail'] });
     },
   });
 }
@@ -586,6 +587,12 @@ export function useCreateServerAvailability() {
       createServerAvailability(serverId, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['serverAvailability', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['serverDetail', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['serverStats'] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail'] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations'] });
+      queryClient.invalidateQueries({ queryKey: ['eligibleStaff'] });
     },
   });
 }
@@ -597,6 +604,12 @@ export function useUpdateServerAvailability() {
       updateServerAvailability(serverId, availabilityId, payload),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['serverAvailability', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['serverDetail', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['serverStats'] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail'] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations'] });
+      queryClient.invalidateQueries({ queryKey: ['eligibleStaff'] });
     },
   });
 }
@@ -608,6 +621,12 @@ export function useDeleteServerAvailability() {
       deleteServerAvailability(serverId, availabilityId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['serverAvailability', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['serverDetail', variables.serverId] });
+      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['serverStats'] });
+      queryClient.invalidateQueries({ queryKey: ['eventDetail'] });
+      queryClient.invalidateQueries({ queryKey: ['eventOperations'] });
+      queryClient.invalidateQueries({ queryKey: ['eligibleStaff'] });
     },
   });
 }

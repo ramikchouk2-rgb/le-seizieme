@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import Header from '@/app/components/dashboard/Header';
 import { useServer } from '@/app/lib/hooks';
+import { parseBackendDateTime } from '@/app/lib/datetime';
 import { useAnnouncer } from '@/app/components/ui/Announcer';
 import { Spinner } from '@/app/lib/loading';
 import Link from 'next/link';
@@ -75,20 +76,22 @@ export default function ServerProfilePage() {
   const profile = data;
 
   const formatDate = (dateStr: string) => {
-    try {
-      return new Date(dateStr).toLocaleDateString('fr-FR');
-    } catch {
-      return dateStr;
-    }
+    const date = parseBackendDateTime(dateStr);
+    return date ? date.toLocaleDateString('fr-FR') : dateStr;
   };
 
   const formatDateTime = (dateStr: string) => {
-    try {
-      return new Date(dateStr).toLocaleString('fr-FR');
-    } catch {
-      return dateStr;
-    }
+    const date = parseBackendDateTime(dateStr);
+    return date ? date.toLocaleString('fr-FR') : dateStr;
   };
+
+  const upcomingAvailability = (profile.availability ?? [])
+    .filter((slot) => {
+      const endDate = parseBackendDateTime(slot.end_datetime);
+      return endDate && endDate.getTime() >= Date.now();
+    })
+    .slice(0, 5);
+  const upcomingEvents = profile.upcoming_events ?? [];
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -264,22 +267,36 @@ export default function ServerProfilePage() {
           <svg className="w-5 h-5 text-[#D4AF37]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          Disponibilités
+          Disponibilités à venir
         </h3>
         <div className="space-y-2">
-          {profile.availability.length > 0 ? (
-            profile.availability.slice(0, 5).map((slot: { id: string; start_datetime: string; end_datetime: string; status: string }) => (
-              <div key={slot.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                <span className="text-sm text-gray-700">
-                  {formatDateTime(slot.start_datetime)} — {formatDateTime(slot.end_datetime)}
-                </span>
-                <span className={`text-xs font-medium ${slot.status === 'AVAILABLE' ? 'text-green-600' : 'text-red-600'}`}>
-                  {slot.status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
-                </span>
+          {upcomingAvailability.length > 0 ? (
+            upcomingAvailability.map((slot) => (
+              <div key={slot.id} className={`rounded-lg px-3 py-2 border-l-4 ${slot.conflict ? 'border-orange-400 bg-orange-50/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-700">
+                      {formatDateTime(slot.start_datetime)} — {formatDateTime(slot.end_datetime)}
+                    </p>
+                    {slot.conflict_reason && (
+                      <p className="mt-1 text-xs text-orange-700">{slot.conflict_reason}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-xs font-medium ${slot.status === 'AVAILABLE' ? 'text-green-600' : slot.status === 'RESERVED' ? 'text-yellow-600' : 'text-red-600'}`}>
+                      {slot.status === 'AVAILABLE' ? 'Disponible' : slot.status === 'RESERVED' ? 'Réservé' : 'Indisponible'}
+                    </span>
+                    {slot.conflict && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+                        Conflit
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
             ))
           ) : (
-            <p className="text-sm text-gray-500">Aucune disponibilité enregistrée</p>
+            <p className="text-sm text-gray-500">Aucune disponibilité à venir.</p>
           )}
         </div>
         <Link
@@ -290,15 +307,48 @@ export default function ServerProfilePage() {
         </Link>
       </div>
 
-      {/* Event History Section */}
+      {/* Upcoming Assigned Events */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
           <svg className="w-5 h-5 text-[#D4AF37]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
-          Historique des événements
+          Événements assignés à venir
         </h3>
-        <p className="text-sm text-gray-500">L'historique des événements sera disponible prochainement.</p>
+        <div className="space-y-2">
+          {upcomingEvents.length > 0 ? (
+            upcomingEvents.map((event) => (
+              <div key={event.event_id} className={`rounded-lg px-3 py-2 border-l-4 ${event.conflict ? 'border-orange-400 bg-orange-50/40' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{event.event_name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {formatDateTime(event.start_datetime)} — {formatDateTime(event.end_datetime)}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {event.role} • {event.assignment_status === 'CONFIRMED' ? 'Confirmé' : 'Proposé'}
+                    </p>
+                    {event.conflict_reason && (
+                      <p className="mt-1 text-xs text-orange-700">{event.conflict_reason}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-xs font-medium ${event.event_status === 'IN_PROGRESS' ? 'text-blue-600' : event.event_status === 'CONFIRMED' ? 'text-green-600' : 'text-gray-600'}`}>
+                      {event.event_status === 'IN_PROGRESS' ? 'En cours' : event.event_status === 'CONFIRMED' ? 'Confirmé' : event.event_status === 'STAFFING' ? 'Staffing' : event.event_status}
+                    </span>
+                    {event.conflict && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+                        Conflit
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-gray-500">Aucun événement assigné à venir.</p>
+          )}
+        </div>
       </div>
 
       {/* Gamification Section */}

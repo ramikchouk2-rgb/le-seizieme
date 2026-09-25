@@ -4,7 +4,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.database import get_pool
-from app.utils.datetime_utils import now_naive_utc
+from app.utils.datetime_utils import now_naive_utc, to_naive_utc
 from app.services.selection_engine import (
     generate_staff_recommendations,
     haversine_km,
@@ -20,6 +20,20 @@ from app.utils.event_utils import load_event
 
 URGENT_WAVE_SIZE = 5
 URGENT_OFFER_EXPIRATION_MINUTES = 15
+
+
+async def resolve_offer_role(
+    server_id: str,
+    requirements: list[dict[str, Any]],
+) -> str:
+    server_skills = await load_server_skills([server_id])
+    skill_names = await load_skill_names()
+    for skill in server_skills.get(server_id, []):
+        skill_name = skill_names.get(str(skill["skill_id"]), "").lower()
+        for requirement in requirements:
+            if normalize_text(skill_name) == normalize_text(requirement["role_name"]):
+                return requirement["role_name"]
+    return "Staff"
 
 
 async def get_existing_offers(event_id: str) -> list[dict[str, Any]]:
@@ -60,6 +74,9 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
     if not event.get("is_urgent"):
         return {"error": "URGENT_EVENT_REQUIRED", "status": "ERROR"}
 
+    if event.get("status") in ("COMPLETED", "CANCELLED"):
+        return {"error": "EVENT_NOT_ACCEPTING_URGENT_OFFERS", "status": "ERROR"}
+
     requirements = await load_event_requirements(event_id)
     existing_offers = await get_existing_offers(event_id)
     confirmed_staff = await get_confirmed_staff(event_id)
@@ -76,8 +93,20 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
     server_skills = await load_server_skills(server_ids)
     skill_names = await load_skill_names()
 
-    event_start = datetime.fromisoformat(event["start_datetime"])
-    event_end = datetime.fromisoformat(event["end_datetime"])
+    event_start_value = event["start_datetime"]
+    event_end_value = event["end_datetime"]
+    event_start = to_naive_utc(
+        event_start_value
+        if isinstance(event_start_value, datetime)
+        else datetime.fromisoformat(event_start_value.replace("Z", "+00:00"))
+    )
+    event_end = to_naive_utc(
+        event_end_value
+        if isinstance(event_end_value, datetime)
+        else datetime.fromisoformat(event_end_value.replace("Z", "+00:00"))
+    )
+    if event_start is None or event_end is None:
+        return {"error": "INVALID_EVENT_DATETIME", "status": "ERROR"}
 
     excluded_servers: set[str] = set()
     for offer in existing_offers:
@@ -86,13 +115,12 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
         wave = offer.get("wave_number") or 0
         if status == "ACCEPTED" or sid in confirmed_staff:
             excluded_servers.add(sid)
-        elif status == "PENDING" and wave == next_wave - 1:
+        elif status == "PENDING":
             excluded_servers.add(sid)
         elif status in ("DECLINED", "EXPIRED") and wave == next_wave - 1:
             pass
-        elif status == "PENDING":
-            excluded_servers.add(sid)
 
+    server_by_id = {str(s["server_id"]): s for s in servers}
     remaining_requirements: list[dict[str, Any]] = []
     for req in requirements:
         role = req["role_name"]
@@ -101,7 +129,14 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
         for offer in existing_offers:
             if offer.get("status") == "ACCEPTED":
                 sid = str(offer["server_id"])
-                if sid in confirmed_staff:
+                if sid not in confirmed_staff:
+                    continue
+                server = server_by_id.get(sid, {})
+                skills = server_skills.get(sid, [])
+                if any(
+                    normalize_text(skill_names.get(str(sk["skill_id"]), "").lower()) == normalize_text(role)
+                    for sk in skills
+                ):
                     accepted_count += 1
         remaining = max(0, quantity - accepted_count)
         if remaining > 0:
@@ -250,6 +285,9 @@ async def accept_offer(event_id: str, offer_id: str) -> dict[str, Any]:
         if existing_staff:
             return {"error": "Server already assigned to this event", "status": "ERROR"}
 
+        requirements = await load_event_requirements(event_id)
+        role = await resolve_offer_role(str(offer["server_id"]), requirements)
+
         async with conn.transaction():
             await conn.execute(
                 "UPDATE urgent_event_offers SET status = 'ACCEPTED', responded_at = NOW() WHERE id = $1",
@@ -263,7 +301,7 @@ async def accept_offer(event_id: str, offer_id: str) -> dict[str, Any]:
                 """,
                 event_id,
                 offer["server_id"],
-                "Staff",
+                role,
             )
             return {
                 "status": "SUCCESS",
@@ -348,7 +386,13 @@ async def get_urgent_status(event_id: str) -> dict[str, Any]:
         accepted = 0
         for offer in offers:
             if offer.get("status") == "ACCEPTED" and str(offer["server_id"]) in confirmed_staff:
-                accepted += 1
+                sid = str(offer["server_id"])
+                skills = server_skills.get(sid, [])
+                if any(
+                    normalize_text(skill_names.get(str(sk["skill_id"]), "").lower()) == normalize_text(role)
+                    for sk in skills
+                ):
+                    accepted += 1
         remaining = max(0, quantity - accepted)
         total_required += quantity
         total_confirmed += accepted
@@ -393,19 +437,16 @@ async def get_urgent_status(event_id: str) -> dict[str, Any]:
         server = server_map.get(sid, {})
         server_name = f"{server.get('first_name', '')} {server.get('last_name', '')}".strip() or sid
         role = "Staff"
-        if o.get("status") == "ACCEPTED" and sid in confirmed_staff:
-            role = "Staff"
-        else:
-            skills = server_skills.get(sid, [])
-            for sk in skills:
-                sk_name = skill_names.get(str(sk["skill_id"]), "").lower()
-                for req in requirements:
-                    if normalize_text(sk_name) == normalize_text(req["role_name"].lower()):
-                        role = req["role_name"]
-                        break
-                else:
-                    continue
-                break
+        skills = server_skills.get(sid, [])
+        for sk in skills:
+            sk_name = skill_names.get(str(sk["skill_id"]), "").lower()
+            for req in requirements:
+                if normalize_text(sk_name) == normalize_text(req["role_name"].lower()):
+                    role = req["role_name"]
+                    break
+            else:
+                continue
+            break
         score = None
         distance_km = None
         reason = None

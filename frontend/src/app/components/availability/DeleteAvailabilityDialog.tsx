@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
+import { parseBackendDateTime } from '@/app/lib/datetime';
 
 interface DeleteAvailabilityDialogProps {
   item: {
@@ -19,6 +20,11 @@ export default function DeleteAvailabilityDialog({ item, onConfirm, onClose, loa
   const [localLoading, setLocalLoading] = useState(false);
   const containerRef = useFocusTrap({ onClose, closeOnEscape: true, restoreFocus: true });
 
+  const formatDate = (dateStr: string) => {
+    const date = parseBackendDateTime(dateStr);
+    return date ? date.toLocaleDateString('fr-FR') : dateStr;
+  };
+
   const handleConfirm = async () => {
     setLocalLoading(true);
     try {
@@ -35,8 +41,8 @@ export default function DeleteAvailabilityDialog({ item, onConfirm, onClose, loa
         <h3 id="delete-availability-dialog-title" className="text-lg font-semibold text-gray-900 mb-2">Supprimer la disponibilité</h3>
         <p className="text-sm text-gray-500 mb-6">
           Voulez-vous vraiment supprimer cette disponibilité du{' '}
-          {new Date(item.start_datetime).toLocaleDateString('fr-FR')} au{' '}
-          {new Date(item.end_datetime).toLocaleDateString('fr-FR')} ?
+          {formatDate(item.start_datetime)} au{' '}
+          {formatDate(item.end_datetime)} ?
         </p>
         <div className="flex justify-end gap-2">
           <button

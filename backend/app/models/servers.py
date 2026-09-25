@@ -25,6 +25,21 @@ class ServerAvailabilityResponse(BaseModel):
     start_datetime: str
     end_datetime: str
     status: str
+    conflict: bool = False
+    conflict_reason: Optional[str] = None
+
+
+class ServerUpcomingEventResponse(BaseModel):
+    assignment_id: str
+    event_id: str
+    event_name: str
+    start_datetime: str
+    end_datetime: str
+    event_status: str
+    assignment_status: str
+    role: str
+    conflict: bool = False
+    conflict_reason: Optional[str] = None
 
 
 class ServerPointsResponse(BaseModel):
@@ -117,13 +132,6 @@ class ServerVehicleUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
-class ServerAvailabilityResponse(BaseModel):
-    id: str
-    start_datetime: str
-    end_datetime: str
-    status: str
-
-
 class ServerAvailabilityCreateRequest(BaseModel):
     start_datetime: datetime
     end_datetime: datetime
@@ -199,6 +207,7 @@ class ServerProfileResponse(BaseModel):
     skills: list
     vehicle: Optional[ServerVehicleResponse] = None
     availability: list[ServerAvailabilityResponse]
+    upcoming_events: list[ServerUpcomingEventResponse]
     points: dict
 
 

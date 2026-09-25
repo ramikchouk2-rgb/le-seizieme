@@ -189,6 +189,8 @@ class EventStaffResponse(BaseModel):
     id: str
     server_id: str
     server_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     gender: str
     city: str
     role: str
@@ -200,6 +202,8 @@ class EventStaffResponse(BaseModel):
     availability_status: str
     status: str
     reasons: list[str]
+    conflict: bool = False
+    conflict_reason: Optional[str] = None
 
 
 class EventStaffListResponse(BaseModel):

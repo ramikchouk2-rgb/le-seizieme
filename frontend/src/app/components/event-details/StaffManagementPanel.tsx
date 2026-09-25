@@ -47,6 +47,7 @@ export default function StaffManagementPanel({
   const totalRequested = requirements.reduce((sum, r) => sum + r.quantity, 0);
   const totalSelected = assignments.length;
   const totalMissing = totalRequested - totalSelected;
+  const conflicts = assignments.filter((assignment) => assignment.conflict);
 
   const handleAdd = async (payload: AddStaffAssignmentRequest) => {
     setLoading(true);
@@ -148,6 +149,17 @@ export default function StaffManagementPanel({
       {success && (
         <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-600">
           {success}
+        </div>
+      )}
+
+      {conflicts.length > 0 && (
+        <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm text-orange-700">
+          <p className="font-medium">Conflits de planning détectés : {conflicts.length}</p>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            {conflicts.map((assignment) => (
+              <li key={assignment.id}>{assignment.first_name} {assignment.last_name} — {assignment.conflict_reason || 'Conflit de planning'}</li>
+            ))}
+          </ul>
         </div>
       )}
 

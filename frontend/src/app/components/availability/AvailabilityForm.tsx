@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '@/app/lib/datetime';
 
 interface AvailabilityFormItem {
   id?: string;
@@ -20,8 +21,8 @@ interface AvailabilityFormProps {
 }
 
 export default function AvailabilityForm({ serverId, item, onSave, onClose, loading }: AvailabilityFormProps) {
-  const [start_datetime, setStart] = useState(item?.start_datetime ? new Date(item.start_datetime).toISOString().slice(0, 16) : '');
-  const [end_datetime, setEnd] = useState(item?.end_datetime ? new Date(item.end_datetime).toISOString().slice(0, 16) : '');
+  const [start_datetime, setStart] = useState(item?.start_datetime ? toDateTimeLocalValue(item.start_datetime) : '');
+  const [end_datetime, setEnd] = useState(item?.end_datetime ? toDateTimeLocalValue(item.end_datetime) : '');
   const [status, setStatus] = useState(item?.status || 'AVAILABLE');
   const [note, setNote] = useState(item?.note || '');
   const [error, setError] = useState('');
@@ -32,7 +33,12 @@ export default function AvailabilityForm({ serverId, item, onSave, onClose, load
     e.preventDefault();
     setError('');
     try {
-      await onSave({ start_datetime, end_datetime, status, note });
+      await onSave({
+        start_datetime: fromDateTimeLocalValue(start_datetime),
+        end_datetime: fromDateTimeLocalValue(end_datetime),
+        status,
+        note,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde.');
     }

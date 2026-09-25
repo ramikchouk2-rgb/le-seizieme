@@ -4,6 +4,129 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.core.database import get_pool
+from app.utils.datetime_utils import to_naive_utc
+
+
+def _naive_utc(value: datetime) -> datetime:
+    normalized = to_naive_utc(value)
+    if normalized is None:
+        raise ValueError("Date et heure invalide.")
+    return normalized
+
+
+def _coerce_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return _naive_utc(value)
+    if isinstance(value, str):
+        try:
+            return _naive_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except (ValueError, TypeError):
+            raise ValueError("Date et heure invalide.")
+    raise ValueError("Date et heure invalide.")
+
+
+def _coerce_datetime_http(value: Any) -> datetime:
+    try:
+        return _coerce_datetime(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def get_event_scheduling_conflict(
+    conn,
+    server_id: str,
+    event_start: datetime,
+    event_end: datetime,
+    exclude_event_id: str | None = None,
+) -> dict[str, Any]:
+    event_start = _naive_utc(event_start)
+    event_end = _naive_utc(event_end)
+    availability_row = await conn.fetchrow(
+        """
+        SELECT id
+        FROM server_availability
+        WHERE server_id = $1
+          AND start_datetime <= $2
+          AND end_datetime >= $3
+          AND status = 'AVAILABLE'
+        LIMIT 1
+        """,
+        server_id,
+        event_start,
+        event_end,
+    )
+    if not availability_row:
+        return {
+            "conflict": True,
+            "conflict_reason": "Aucune disponibilité disponible ne couvre cet événement.",
+        }
+
+    rows = await conn.fetch(
+        """
+        SELECT e.id, e.name, e.start_datetime, e.end_datetime
+        FROM event_staff es
+        JOIN events e ON e.id = es.event_id
+        WHERE es.server_id = $1
+          AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
+          AND e.start_datetime < $3
+          AND e.end_datetime > $2
+          AND ($4::uuid IS NULL OR e.id <> $4::uuid)
+        ORDER BY e.start_datetime ASC
+        LIMIT 1
+        """,
+        server_id,
+        event_start,
+        event_end,
+        exclude_event_id,
+    )
+    if not rows:
+        return {"conflict": False, "conflict_reason": None}
+
+    event = rows[0]
+    return {
+        "conflict": True,
+        "conflict_reason": (
+            f"Conflit avec l'événement « {event['name']} » "
+            f"({event['start_datetime'].strftime('%d/%m/%Y %H:%M')})."
+        ),
+    }
+
+
+async def get_availability_scheduling_conflict(
+    conn,
+    server_id: str,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    start_datetime = _naive_utc(start_datetime)
+    end_datetime = _naive_utc(end_datetime)
+    rows = await conn.fetch(
+        """
+        SELECT e.id, e.name, e.start_datetime, e.end_datetime
+        FROM events e
+        JOIN event_staff es ON e.id = es.event_id
+        WHERE es.server_id = $1
+          AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
+          AND e.start_datetime < $3
+          AND e.end_datetime > $2
+        ORDER BY e.start_datetime ASC
+        LIMIT 1
+        """,
+        server_id,
+        start_datetime,
+        end_datetime,
+    )
+    if not rows:
+        return {"conflict": False, "conflict_reason": None}
+
+    event = rows[0]
+    return {
+        "conflict": True,
+        "conflict_reason": (
+            f"Conflit avec l'événement « {event['name']} » "
+            f"({event['start_datetime'].strftime('%d/%m/%Y %H:%M')})."
+        ),
+    }
 
 
 async def get_server_availability(server_id: str) -> list[dict[str, Any]]:
@@ -27,6 +150,12 @@ async def get_server_availability(server_id: str) -> list[dict[str, Any]]:
         )
         result = []
         for r in rows:
+            conflict = await get_availability_scheduling_conflict(
+                conn,
+                server_id,
+                r["start_datetime"],
+                r["end_datetime"],
+            )
             result.append({
                 "id": str(r["id"]),
                 "server_id": str(r["server_id"]),
@@ -34,8 +163,7 @@ async def get_server_availability(server_id: str) -> list[dict[str, Any]]:
                 "end_datetime": r["end_datetime"].isoformat() if isinstance(r["end_datetime"], datetime) else str(r["end_datetime"]),
                 "status": r["status"],
                 "note": r["note"],
-                "conflict": False,
-                "conflict_reason": None,
+                **conflict,
             })
         return result
 
@@ -53,12 +181,8 @@ async def create_availability(server_id: str, data: dict[str, Any]) -> dict[str,
             if not server_row["is_active"]:
                 raise HTTPException(status_code=400, detail="Serveur inactif.")
 
-            start_dt = data["start_datetime"]
-            end_dt = data["end_datetime"]
-            if isinstance(start_dt, str):
-                start_dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
-            if isinstance(end_dt, str):
-                end_dt = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
+            start_dt = _coerce_datetime_http(data["start_datetime"])
+            end_dt = _coerce_datetime_http(data["end_datetime"])
 
             if start_dt >= end_dt:
                 raise HTTPException(status_code=400, detail="start_datetime doit être inférieur à end_datetime.")
@@ -146,12 +270,8 @@ async def update_availability(server_id: str, availability_id: str, data: dict[s
             if not avail_row:
                 raise HTTPException(status_code=404, detail="Disponibilité introuvable.")
 
-            start_dt = data.get("start_datetime", avail_row["start_datetime"])
-            end_dt = data.get("end_datetime", avail_row["end_datetime"])
-            if isinstance(start_dt, str):
-                start_dt = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
-            if isinstance(end_dt, str):
-                end_dt = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
+            start_dt = _coerce_datetime_http(data.get("start_datetime", avail_row["start_datetime"]))
+            end_dt = _coerce_datetime_http(data.get("end_datetime", avail_row["end_datetime"]))
 
             if start_dt >= end_dt:
                 raise HTTPException(status_code=400, detail="start_datetime doit être inférieur à end_datetime.")
@@ -176,27 +296,26 @@ async def update_availability(server_id: str, availability_id: str, data: dict[s
                     detail="Cette période chevauche une disponibilité existante.",
                 )
 
-            event_conflict = await conn.fetch(
-                """
-                SELECT e.id, e.name, e.start_datetime, e.end_datetime
-                FROM events e
-                JOIN event_staff es ON e.id = es.event_id
-                WHERE es.server_id = $1
-                  AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
-                  AND tsrange(e.start_datetime::timestamp, e.end_datetime::timestamp) && tsrange($2::timestamp, $3::timestamp)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM server_availability sa
-                      WHERE sa.server_id = $1
-                        AND sa.id = $4
-                        AND tsrange(sa.start_datetime::timestamp, sa.end_datetime::timestamp) && tsrange(e.start_datetime::timestamp, e.end_datetime::timestamp)
-                  )
-                LIMIT 1
-                """,
-                server_id,
-                start_dt,
-                end_dt,
-                availability_id,
-            )
+            current_start = _naive_utc(avail_row["start_datetime"])
+            current_end = _naive_utc(avail_row["end_datetime"])
+            interval_changed = start_dt != current_start or end_dt != current_end
+
+            event_conflict = None
+            if interval_changed:
+                event_conflict = await conn.fetch(
+                    """
+                    SELECT e.id, e.name, e.start_datetime, e.end_datetime
+                    FROM events e
+                    JOIN event_staff es ON e.id = es.event_id
+                    WHERE es.server_id = $1
+                      AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
+                      AND tsrange(e.start_datetime::timestamp, e.end_datetime::timestamp) && tsrange($2::timestamp, $3::timestamp)
+                    LIMIT 1
+                    """,
+                    server_id,
+                    start_dt,
+                    end_dt,
+                )
             if event_conflict:
                 raise HTTPException(
                     status_code=400,
@@ -285,12 +404,11 @@ async def delete_availability(server_id: str, availability_id: str) -> dict[str,
                 JOIN event_staff es ON e.id = es.event_id
                 WHERE es.server_id = $1
                   AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
-                  AND e.start_datetime < $3
-                  AND e.end_datetime > $2
+                  AND tsrange(e.start_datetime::timestamp, e.end_datetime::timestamp) && tsrange($2::timestamp, $3::timestamp)
                 """,
                 server_id,
-                avail_row["start_datetime"],
-                avail_row["end_datetime"],
+                _naive_utc(avail_row["start_datetime"]),
+                _naive_utc(avail_row["end_datetime"]),
             )
 
             if conflict_count > 0:
@@ -337,6 +455,8 @@ async def check_availability_for_event(server_id: str, event_id: str) -> dict[st
                 "reason": None,
             }
 
+        event_start = _naive_utc(event_row["start_datetime"])
+        event_end = _naive_utc(event_row["end_datetime"])
         avail_row = await conn.fetchrow(
             """
             SELECT id, status
@@ -347,8 +467,8 @@ async def check_availability_for_event(server_id: str, event_id: str) -> dict[st
             LIMIT 1
             """,
             server_id,
-            event_row["start_datetime"],
-            event_row["end_datetime"],
+            event_start,
+            event_end,
         )
         if not avail_row:
             return {

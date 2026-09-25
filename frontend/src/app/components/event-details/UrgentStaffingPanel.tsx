@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import Link from 'next/link';
+import { useState, useEffect } from 'react';
 import { UrgentStatus, UrgentOffer, getUrgentStatus, generateUrgentOffers, acceptUrgentOffer, declineUrgentOffer, expireUrgentOffer, UrgentActionResponse } from '@/app/lib/api';
 import UrgentOfferCard from './UrgentOfferCard';
 import ConfirmUrgentActionDialog from './ConfirmUrgentActionDialog';
@@ -12,11 +11,11 @@ interface UrgentStaffingPanelProps {
   eventUrgent: boolean;
 }
 
-const WAVE_STATUS_LABELS: Record<string, string> = {
-  PENDING: 'En cours',
-  ACCEPTED: 'Acceptée',
-  DECLINED: 'Refusée',
-  EXPIRED: 'Expirée',
+const getWaveStatus = (wave: UrgentStatus['waves'][number]) => {
+  if (wave.pending > 0) return 'En cours';
+  if (wave.accepted > 0) return 'Acceptée';
+  if (wave.declined > 0) return 'Refusée';
+  return 'Expirée';
 };
 
 export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaffingPanelProps) {
@@ -31,7 +30,7 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
     message: string;
     confirmLabel: string;
     onConfirm: () => void;
-    offer?: UrgentOffer;
+    offer?: Partial<UrgentOffer>;
   } | null>(null);
   const { announceSuccess, announceError } = useAnnouncer();
 
@@ -87,7 +86,11 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
         result = await expireUrgentOffer(eventId, offer.offer_id);
         announceSuccess('Offre expirée.');
       }
-      setStatus(result.urgent_status);
+      if (result.urgent_status) {
+        setStatus(result.urgent_status);
+      } else {
+        await loadStatus();
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Impossible de traiter cette action.';
       setError(message);
@@ -100,7 +103,6 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
   const openGenerateDialog = () => {
     if (!status) return;
     const remaining = status.remaining_staff;
-    const deadline = `${15} min`;
     setDialogConfig({
       title: 'Lancer une nouvelle vague ?',
       message: `Vous êtes sur le point de lancer la vague ${status.wave_number + 1}. Les offres seront envoyées aux serveurs éligibles pour les ${remaining} poste${remaining > 1 ? 's' : ''} restant${remaining > 1 ? 's' : ''}.`,
@@ -164,7 +166,6 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
     return null;
   }
 
-  const pendingOffers = status.offers.filter(o => o.status === 'PENDING');
   const currentWaveOffers = status.offers.filter(o => o.wave_number === status.wave_number);
 
   const getTimeRemaining = (expiresAt: string | null) => {
@@ -296,7 +297,7 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
                     Vague {wave.wave_number}
                   </span>
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border bg-blue-50 text-blue-700 border-blue-200">
-                    {WAVE_STATUS_LABELS.PENDING}
+                    {getWaveStatus(wave)}
                   </span>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-gray-500">

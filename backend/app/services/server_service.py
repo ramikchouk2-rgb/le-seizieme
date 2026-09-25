@@ -2,6 +2,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.database import get_pool
+from app.services.availability_service import (
+    get_availability_scheduling_conflict,
+    get_event_scheduling_conflict,
+)
 from app.utils.datetime_utils import now_naive_utc
 from fastapi import HTTPException
 
@@ -47,6 +51,7 @@ async def load_server_list(
 ) -> tuple[list[dict[str, Any]], int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
+        now = now_naive_utc()
         where_clauses = ["s.is_active = TRUE"]
         params: list[Any] = []
         idx = 1
@@ -112,12 +117,20 @@ async def load_server_list(
         if availability:
             if availability == "AVAILABLE":
                 where_clauses.append(
-                    f"(sa.start_datetime <= NOW() AND sa.end_datetime > NOW() AND sa.status = 'AVAILABLE')"
+                    f"(sa.start_datetime <= ${idx} AND sa.end_datetime > ${idx + 1} AND sa.status = 'AVAILABLE')"
                 )
+                params.extend([now, now])
+                idx += 2
             else:
                 where_clauses.append(
-                    f"(sa.id IS NULL OR sa.end_datetime <= NOW() OR sa.status = 'UNAVAILABLE')"
+                    f"(sa.id IS NULL OR sa.end_datetime <= ${idx} OR sa.status IN ('UNAVAILABLE', 'RESERVED'))"
                 )
+                params.append(now)
+                idx += 1
+
+        now_idx = idx
+        params.extend([now, now])
+        idx += 2
 
         where_sql = " AND ".join(where_clauses)
         order_column = SORT_WHITELIST.get(sort_by, "s.first_name")
@@ -133,8 +146,8 @@ async def load_server_list(
             LEFT JOIN server_locations sl ON s.id = sl.server_id AND sl.is_current = TRUE
             LEFT JOIN vehicles v ON v.owner_server_id = s.id AND v.is_active = TRUE
             LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= NOW()
-                AND sa.end_datetime > NOW()
+                AND sa.start_datetime <= ${now_idx}
+                AND sa.end_datetime > ${now_idx + 1}
             WHERE {where_sql}
         """
 
@@ -151,7 +164,7 @@ async def load_server_list(
                 s.years_experience,
                 sp.worker_type,
                 CASE
-                    WHEN sa.start_datetime <= NOW() AND sa.end_datetime > NOW() AND sa.status = 'AVAILABLE'
+                    WHEN sa.start_datetime <= ${now_idx} AND sa.end_datetime > ${now_idx + 1} AND sa.status = 'AVAILABLE'
                     THEN 'AVAILABLE'
                     ELSE 'UNAVAILABLE'
                 END AS availability_status,
@@ -170,8 +183,8 @@ async def load_server_list(
             LEFT JOIN server_locations sl ON s.id = sl.server_id AND sl.is_current = TRUE
             LEFT JOIN vehicles v ON v.owner_server_id = s.id AND v.is_active = TRUE
             LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= NOW()
-                AND sa.end_datetime > NOW()
+                AND sa.start_datetime <= ${now_idx}
+                AND sa.end_datetime > ${now_idx + 1}
             LEFT JOIN LATERAL (
                 SELECT sk2.name, ss2.level
                 FROM server_skills ss2
@@ -225,13 +238,14 @@ async def load_server_list(
 async def load_server_detail(server_id: str) -> dict[str, Any] | None:
     pool = await get_pool()
     async with pool.acquire() as conn:
+        now = now_naive_utc()
         server_row = await conn.fetchrow(
             """
             SELECT s.id, s.first_name, s.last_name, s.gender, s.email, s.phone,
                    c.name AS city, s.years_experience,
                    sp.worker_type,
                    CASE
-                       WHEN sa.start_datetime <= NOW() AND sa.end_datetime > NOW() AND sa.status = 'AVAILABLE'
+                       WHEN sa.start_datetime <= $2 AND sa.end_datetime > $3 AND sa.status = 'AVAILABLE'
                        THEN 'AVAILABLE'
                        ELSE 'UNAVAILABLE'
                    END AS availability_status,
@@ -242,12 +256,14 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             LEFT JOIN server_profile sp ON s.id = sp.server_id
             LEFT JOIN server_locations sl ON s.id = sl.server_id AND sl.is_current = TRUE
             LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= NOW()
-                AND sa.end_datetime > NOW()
+                AND sa.start_datetime <= $2
+                AND sa.end_datetime > $3
             WHERE s.id = $1
             LIMIT 1
             """,
             server_id,
+            now,
+            now,
         )
         if not server_row:
             return None
@@ -273,14 +289,33 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             server_id,
         )
 
+        now = now_naive_utc()
+
         availability_rows = await conn.fetch(
             """
-            SELECT id, start_datetime, end_datetime, status
+            SELECT id, start_datetime, end_datetime, status, note
             FROM server_availability
             WHERE server_id = $1
             ORDER BY start_datetime ASC
             """,
             server_id,
+        )
+
+        upcoming_event_rows = await conn.fetch(
+            """
+            SELECT es.id AS assignment_id, e.id AS event_id, e.name AS event_name,
+                   e.start_datetime, e.end_datetime, e.status AS event_status,
+                   es.assignment_status, es.role
+            FROM event_staff es
+            JOIN events e ON e.id = es.event_id
+            WHERE es.server_id = $1
+              AND es.assignment_status IN ('PROPOSED', 'CONFIRMED')
+              AND e.status NOT IN ('CANCELLED', 'COMPLETED')
+              AND (e.start_datetime >= $2 OR (e.status = 'IN_PROGRESS' AND e.end_datetime > $2))
+            ORDER BY e.start_datetime ASC
+            """,
+            server_id,
+            now,
         )
 
         year, month = await _get_current_month_year()
@@ -369,8 +404,35 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
                     "start_datetime": r["start_datetime"].isoformat() if isinstance(r["start_datetime"], datetime) else str(r["start_datetime"]),
                     "end_datetime": r["end_datetime"].isoformat() if isinstance(r["end_datetime"], datetime) else str(r["end_datetime"]),
                     "status": r["status"],
+                    "note": r["note"],
+                    **(await get_availability_scheduling_conflict(
+                        conn,
+                        server_id,
+                        r["start_datetime"],
+                        r["end_datetime"],
+                    )),
                 }
                 for r in availability_rows
+            ],
+            "upcoming_events": [
+                {
+                    "assignment_id": str(r["assignment_id"]),
+                    "event_id": str(r["event_id"]),
+                    "event_name": r["event_name"],
+                    "start_datetime": r["start_datetime"].isoformat() if isinstance(r["start_datetime"], datetime) else str(r["start_datetime"]),
+                    "end_datetime": r["end_datetime"].isoformat() if isinstance(r["end_datetime"], datetime) else str(r["end_datetime"]),
+                    "event_status": r["event_status"],
+                    "assignment_status": r["assignment_status"],
+                    "role": r["role"],
+                    **(await get_event_scheduling_conflict(
+                        conn,
+                        server_id,
+                        r["start_datetime"],
+                        r["end_datetime"],
+                        str(r["event_id"]),
+                    )),
+                }
+                for r in upcoming_event_rows
             ],
             "points": {
                 "total_points": total_points,
@@ -384,27 +446,31 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
 async def load_server_stats() -> dict[str, int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
+        now = now_naive_utc()
         row = await conn.fetchrow(
             """
             SELECT
                 COUNT(*) FILTER (WHERE s.is_active = TRUE) AS total,
                 COUNT(*) FILTER (
                     WHERE s.is_active = TRUE
-                    AND sa.start_datetime <= NOW()
-                    AND sa.end_datetime > NOW()
+                    AND sa.start_datetime <= $1
+                    AND sa.end_datetime > $2
                     AND sa.status = 'AVAILABLE'
                 ) AS available,
                 COUNT(*) FILTER (
                     WHERE s.is_active = TRUE
-                    AND (sa.id IS NULL OR sa.end_datetime <= NOW() OR sa.status = 'UNAVAILABLE')
+                    AND (sa.id IS NULL OR sa.end_datetime <= $3 OR sa.status IN ('UNAVAILABLE', 'RESERVED'))
                 ) AS unavailable,
                 COUNT(*) FILTER (WHERE s.is_active = TRUE AND v.id IS NOT NULL) AS with_vehicle
             FROM servers s
             LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= NOW()
-                AND sa.end_datetime > NOW()
+                AND sa.start_datetime <= $1
+                AND sa.end_datetime > $2
             LEFT JOIN vehicles v ON v.owner_server_id = s.id AND v.is_active = TRUE
-            """
+            """,
+            now,
+            now,
+            now,
         )
         return {
             "total": row["total"] if row else 0,

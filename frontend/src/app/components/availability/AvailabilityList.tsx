@@ -1,6 +1,7 @@
 'use client';
 
 import { AvailabilityResponse } from '@/app/lib/api';
+import { parseBackendDateTime } from '@/app/lib/datetime';
 
 interface AvailabilityListProps {
   items: AvailabilityResponse[];
@@ -11,20 +12,21 @@ interface AvailabilityListProps {
 
 export default function AvailabilityList({ items, onEdit, onDelete, statusStyles }: AvailabilityListProps) {
   const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const date = parseBackendDateTime(dateStr);
+    return date ? date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : dateStr;
   };
 
   const formatTime = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const date = parseBackendDateTime(dateStr);
+    return date ? date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : dateStr;
   };
 
   const getDuration = (start: string, end: string) => {
-    const startDate = new Date(start);
-    const endDate = new Date(end);
+    const startDate = parseBackendDateTime(start);
+    const endDate = parseBackendDateTime(end);
+    if (!startDate || !endDate) return '—';
     const hours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
-    return `${hours}h`;
+    return `${Math.round(hours)}h`;
   };
 
   return (
@@ -45,7 +47,13 @@ export default function AvailabilityList({ items, onEdit, onDelete, statusStyles
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {items.map((item) => (
+            {items.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-500">
+                  Aucune disponibilité enregistrée.
+                </td>
+              </tr>
+            ) : items.map((item) => (
               <tr key={item.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 text-sm text-gray-900">{formatDate(item.start_datetime)}</td>
                 <td className="px-4 py-3 text-sm text-gray-700 hidden md:table-cell">{formatTime(item.start_datetime)}</td>
@@ -56,9 +64,9 @@ export default function AvailabilityList({ items, onEdit, onDelete, statusStyles
                     {item.status === 'AVAILABLE' ? 'Disponible' : item.status === 'UNAVAILABLE' ? 'Indisponible' : 'Réservé'}
                   </span>
                   {item.conflict && (
-                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
-                      Conflit
-                    </span>
+                    <div className="mt-1 max-w-xs text-xs text-orange-700">
+                      {item.conflict_reason || 'Conflit de planning'}
+                    </div>
                   )}
                 </td>
                 <td className="px-4 py-3 text-sm">

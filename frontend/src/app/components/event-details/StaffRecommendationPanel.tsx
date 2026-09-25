@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { StaffRecommendationResponse, confirmStaffAssignments, ConfirmStaffAssignmentRequest, ConfirmStaffResponse } from '@/app/lib/api';
 import ConfirmStaffDialog from './ConfirmStaffDialog';
@@ -38,7 +38,28 @@ export default function StaffRecommendationPanel({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirmResult, setConfirmResult] = useState<ConfirmStaffResponse | null>(null);
   const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
+  const initializedRef = useRef(false);
   const { announceSuccess, announceError } = useAnnouncer();
+
+  useEffect(() => {
+    if (!recommendations) {
+      setSelectedServers(new Set());
+      initializedRef.current = false;
+      return;
+    }
+
+    // Only initialize on first load, preserve manual selections on subsequent renders
+    if (!initializedRef.current) {
+      const initial = new Set<string>();
+      for (const req of recommendations.requirements) {
+        for (const candidate of req.selected) {
+          initial.add(candidate.server_id);
+        }
+      }
+      setSelectedServers(initial);
+      initializedRef.current = true;
+    }
+  }, [recommendations]);
 
   if (loading) {
     return (
@@ -71,24 +92,6 @@ export default function StaffRecommendationPanel({
         <p className="text-gray-500 text-sm">Aucune recommandation générée.</p>
       </div>
     );
-  }
-
-  // Initialize selected servers from backend recommendations
-  const initializeSelection = () => {
-    const initial = new Set<string>();
-    for (const req of recommendations.requirements) {
-      for (const candidate of req.selected) {
-        initial.add(candidate.server_id);
-      }
-    }
-    setSelectedServers(initial);
-  };
-
-  // Run initialization once
-  const [initialized, setInitialized] = useState(false);
-  if (!initialized) {
-    initializeSelection();
-    setInitialized(true);
   }
 
   const totalRequested = recommendations.requirements.reduce(
@@ -255,9 +258,14 @@ export default function StaffRecommendationPanel({
                             className="flex-1 min-w-0"
                           >
                             <p className="text-sm font-medium text-gray-900 truncate">{candidate.name}</p>
-                            <p className="text-xs text-gray-500">
-                              {candidate.experience_years} ans • Niveau {candidate.main_skill_level}/10 • {candidate.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}
-                            </p>
+                            <div className="text-xs text-gray-500 flex items-center gap-1">
+                              <span>{candidate.experience_years} ans • Niveau {candidate.main_skill_level}/10 • {candidate.availability_status === 'AVAILABLE' ? 'Disponible' : 'Indisponible'}</span>
+                              {candidate.conflict && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-700 border border-orange-200" title={candidate.conflict_reason || undefined}>
+                                  Conflit
+                                </span>
+                              )}
+                            </div>
                           </Link>
                         </div>
                         <div className="text-right ml-4">
@@ -300,12 +308,19 @@ export default function StaffRecommendationPanel({
                                 </svg>
                               )}
                             </button>
+                          <div className="flex min-w-0 items-center gap-1">
                             <Link
                               href={`/dashboard/servers/${candidate.server_id}`}
                               className="text-gray-700 hover:text-[#D4AF37] truncate"
                             >
                               {candidate.name}
                             </Link>
+                            {candidate.conflict && (
+                              <span className="inline-flex shrink-0 items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-700 border border-orange-200" title={candidate.conflict_reason || undefined}>
+                                Conflit
+                              </span>
+                            )}
+                          </div>
                           </div>
                           <span className="text-gray-500">
                             Score: {candidate.score?.toFixed(1) ?? '—'}

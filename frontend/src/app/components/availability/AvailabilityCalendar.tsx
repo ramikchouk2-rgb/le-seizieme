@@ -1,5 +1,7 @@
 'use client';
 
+import { parseBackendDateTime } from '@/app/lib/datetime';
+
 interface AvailabilityCalendarProps {
   items: {
     id: string;
@@ -23,9 +25,12 @@ export default function AvailabilityCalendar({ items }: AvailabilityCalendarProp
   const getStatusForDay = (day: number) => {
     const date = new Date(currentYear, currentMonth, day);
     const matching = items.filter((item) => {
-      const start = new Date(item.start_datetime);
-      const end = new Date(item.end_datetime);
-      return date >= start && date <= end;
+      const start = parseBackendDateTime(item.start_datetime);
+      const end = parseBackendDateTime(item.end_datetime);
+      if (!start || !end) return false;
+      const dayStart = new Date(currentYear, currentMonth, day);
+      const dayEnd = new Date(currentYear, currentMonth, day, 23, 59, 59, 999);
+      return dayStart <= end && dayEnd >= start;
     });
 
     if (matching.length === 0) return null;

@@ -1,6 +1,25 @@
-from pydantic import BaseModel, field_validator, model_validator
-from typing import Optional
 from datetime import datetime
+from typing import Any, Optional
+
+from pydantic import BaseModel, field_validator, model_validator
+
+from app.utils.datetime_utils import to_naive_utc
+
+
+def _parse_datetime(value: Any) -> datetime:
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            raise TypeError
+        normalized = to_naive_utc(parsed)
+        if normalized is None:
+            raise ValueError("Date et heure invalides.")
+        return normalized
+    except (ValueError, TypeError):
+        raise ValueError("Date et heure invalides.")
 
 
 class AvailabilityCreateRequest(BaseModel):
@@ -33,7 +52,9 @@ class AvailabilityCreateRequest(BaseModel):
 
     @model_validator(mode='after')
     def validate_range(self):
-        if self.start_datetime and self.end_datetime <= self.start_datetime:
+        start = _parse_datetime(self.start_datetime)
+        end = _parse_datetime(self.end_datetime)
+        if end <= start:
             raise ValueError('end_datetime doit être supérieur à start_datetime.')
         return self
 
@@ -54,7 +75,9 @@ class AvailabilityUpdateRequest(BaseModel):
     @model_validator(mode='after')
     def validate_range(self):
         if self.end_datetime is not None and self.start_datetime is not None:
-            if self.end_datetime <= self.start_datetime:
+            start = _parse_datetime(self.start_datetime)
+            end = _parse_datetime(self.end_datetime)
+            if end <= start:
                 raise ValueError('end_datetime doit être supérieur à start_datetime.')
         return self
 

@@ -11,7 +11,7 @@ interface ConfirmUrgentActionDialogProps {
   title: string;
   message: string;
   confirmLabel?: string;
-  offer?: UrgentOffer | null;
+  offer?: Partial<UrgentOffer> | null;
 }
 
 export default function ConfirmUrgentActionDialog({
@@ -49,8 +49,8 @@ export default function ConfirmUrgentActionDialog({
 
         {offer && (
           <div className="bg-gray-50 rounded-lg p-3 mb-4">
-            <p className="text-sm font-medium text-gray-900">{offer.server_name}</p>
-            <p className="text-xs text-gray-500">{offer.role} • Vague {offer.wave_number}</p>
+            <p className="text-sm font-medium text-gray-900">{offer.server_name || 'Offre urgente'}</p>
+            <p className="text-xs text-gray-500">{offer.role || 'Rôle non renseigné'} • Vague {offer.wave_number ?? '—'}</p>
           </div>
         )}
 
