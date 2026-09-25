@@ -1,10 +1,11 @@
 import logging
+import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -17,6 +18,7 @@ from app.routers.gamification import router as gamification_router
 from app.routers.servers import router as servers_router
 from app.routers.availability import router as availability_router
 from app.routers.dashboard import router as dashboard_router
+from app.routers.users import router as users_router
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +43,11 @@ app.add_middleware(
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> Response:
+    return Response(
         status_code=422,
-        content={"detail": exc.errors()},
+        content=json.dumps({"detail": exc.errors()}, default=str),
+        media_type="application/json",
     )
 
 
@@ -73,3 +76,4 @@ app.include_router(gamification_router, prefix=settings.API_V1_STR, tags=["gamif
 app.include_router(servers_router, prefix=settings.API_V1_STR, tags=["servers"])
 app.include_router(availability_router, prefix=settings.API_V1_STR, tags=["availability"])
 app.include_router(dashboard_router, prefix=settings.API_V1_STR, tags=["dashboard"])
+app.include_router(users_router, prefix=settings.API_V1_STR, tags=["users"])
