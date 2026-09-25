@@ -421,3 +421,272 @@ class TestAuditLogAuthorization:
 
         after = await _count_audit_log_by_action(pool, "USER_DEACTIVATED")
         assert before == after
+
+
+class TestAuditLogReadAuthorization:
+    async def test_unauthenticated_get_audit_log_returns_401(self, client: AsyncClient):
+        r = await client.get("/api/audit-log")
+        assert r.status_code == 401
+
+    async def test_route_ordering_audit_log_not_caught_by_users_dynamic(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert "items" in data
+        assert "total" in data
+
+    async def test_manager_get_audit_log_returns_403(self, client: AsyncClient, manager_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(manager_token))
+        assert r.status_code == 403
+
+    async def test_staff_get_audit_log_returns_403(self, client: AsyncClient, staff_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(staff_token))
+        assert r.status_code == 403
+
+
+class TestAuditLogReadPagination:
+    async def test_admin_can_list_audit_log(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert "items" in data
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "total_pages" in data
+        assert isinstance(data["items"], list)
+
+    async def test_pagination_defaults(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["page"] == 1
+        assert data["page_size"] == 20
+
+    async def test_page_size_respected(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log?page_size=3", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["page_size"] == 3
+        assert len(data["items"]) <= 3
+
+    async def test_page_respected(self, client: AsyncClient, admin_token, pool):
+        await _seed_audit_records(pool, count=5)
+        r = await client.get("/api/audit-log?page=2&page_size=2", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["page"] == 2
+        assert data["page_size"] == 2
+        assert len(data["items"]) <= 2
+
+    async def test_page_beyond_total_returns_empty(self, client: AsyncClient, admin_token, pool):
+        await _seed_audit_records(pool, count=2)
+        r = await client.get("/api/audit-log?page=999&page_size=10", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["items"] == []
+        assert data["total"] >= 2
+        assert data["total_pages"] >= 1
+
+    async def test_page_size_below_minimum_rejected(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log?page_size=0", headers=_auth_headers(admin_token))
+        assert r.status_code == 422
+
+    async def test_page_size_above_maximum_rejected(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log?page_size=200", headers=_auth_headers(admin_token))
+        assert r.status_code == 422
+
+    async def test_total_pages_calculation(self, client: AsyncClient, admin_token, pool):
+        await _seed_audit_records(pool, count=3)
+        r = await client.get("/api/audit-log?page=1&page_size=2", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_pages"] == max(1, -(-data["total"] // 2))
+
+
+class TestAuditLogReadFiltering:
+    async def test_filter_by_action(self, client: AsyncClient, admin_token, pool):
+        await _seed_audit_records(pool, count=3, actions=["USER_CREATED", "USER_UPDATED"])
+        r = await client.get("/api/audit-log?action=USER_CREATED", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert all(item["action"] == "USER_CREATED" for item in data["items"])
+
+    async def test_filter_by_actor_user_id(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        await _seed_audit_records(pool, count=3, actions=["USER_CREATED"], actor_id=admin_id)
+        r = await client.get(f"/api/audit-log?actor_user_id={admin_id}", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert all(item["actor_user_id"] == admin_id for item in data["items"])
+
+    async def test_filter_by_target_user_id(self, client: AsyncClient, admin_token, pool):
+        async with pool.acquire() as conn:
+            target_id = await _create_user_direct(conn, "audit_target@example.org")
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        await _seed_audit_records(pool, count=3, actions=["USER_CREATED"], actor_id=admin_id, target_id=target_id)
+        r = await client.get(f"/api/audit-log?target_user_id={target_id}", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert all(item["target_user_id"] == target_id for item in data["items"])
+
+    async def test_filter_by_created_after(self, client: AsyncClient, admin_token, pool):
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(hours=1)
+        await _seed_audit_records(pool, count=2)
+        r = await client.get(
+            f"/api/audit-log?created_after={cutoff.isoformat()}",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        for item in data["items"]:
+            item_dt = datetime.fromisoformat(item["created_at"])
+            assert item_dt >= cutoff
+
+    async def test_filter_by_created_before(self, client: AsyncClient, admin_token, pool):
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() + timedelta(hours=1)
+        await _seed_audit_records(pool, count=2)
+        r = await client.get(
+            f"/api/audit-log?created_before={cutoff.isoformat()}",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        for item in data["items"]:
+            item_dt = datetime.fromisoformat(item["created_at"])
+            assert item_dt <= cutoff
+
+    async def test_combined_filters(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        await _seed_audit_records(pool, count=5, actions=["USER_CREATED", "USER_UPDATED"], actor_id=admin_id)
+        r = await client.get(
+            f"/api/audit-log?action=USER_CREATED&actor_user_id={admin_id}",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert all(item["action"] == "USER_CREATED" and item["actor_user_id"] == admin_id for item in data["items"])
+
+
+class TestAuditLogReadContent:
+    async def test_audit_log_item_fields(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        async with pool.acquire() as conn:
+            target_id = await _create_user_direct(conn, "content_check@example.org")
+        await _seed_audit_records(pool, count=1, actions=["USER_CREATED"], actor_id=admin_id, target_id=target_id)
+        r = await client.get("/api/audit-log?page_size=1", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["items"]) >= 1
+        item = data["items"][0]
+        assert "id" in item
+        assert "actor_user_id" in item
+        assert "target_user_id" in item
+        assert "action" in item
+        assert "detail" in item
+        assert "created_at" in item
+        assert "actor_email" in item
+        assert "target_email" in item
+
+    async def test_audit_log_detail_is_object(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        async with pool.acquire() as conn:
+            target_id = await _create_user_direct(conn, "detail_check@example.org")
+        await _seed_audit_records(pool, count=1, actions=["USER_CREATED"], actor_id=admin_id, target_id=target_id)
+        r = await client.get("/api/audit-log?page_size=1&action=USER_CREATED", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["items"]) >= 1
+        detail = data["items"][0]["detail"]
+        assert isinstance(detail, dict)
+
+    async def test_audit_log_actor_email_populated(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        async with pool.acquire() as conn:
+            target_id = await _create_user_direct(conn, "actor_email_check@example.org")
+        await _seed_audit_records(pool, count=1, actions=["USER_CREATED"], actor_id=admin_id, target_id=target_id)
+        r = await client.get(
+            f"/api/audit-log?action=USER_CREATED&actor_user_id={admin_id}",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["items"]) >= 1
+        assert data["items"][0]["actor_email"] == ADMIN_EMAIL
+
+    async def test_audit_log_target_email_populated(self, client: AsyncClient, admin_token, pool):
+        admin = await get_user_by_email(ADMIN_EMAIL)
+        admin_id = str(admin["id"])
+        target_email = "target_email_check@example.org"
+        async with pool.acquire() as conn:
+            target_id = await _create_user_direct(conn, target_email)
+        await _seed_audit_records(pool, count=1, actions=["USER_CREATED"], actor_id=admin_id, target_id=target_id)
+        r = await client.get(
+            f"/api/audit-log?action=USER_CREATED&target_user_id={target_id}",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["items"]) >= 1
+        assert data["items"][0]["target_email"] == target_email
+
+    async def test_invalid_action_filter_returns_empty(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log?action=NONEXISTENT_ACTION", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+
+    async def test_invalid_target_user_id_filter_returns_empty(self, client: AsyncClient, admin_token):
+        r = await client.get(
+            "/api/audit-log?target_user_id=00000000-0000-0000-0000-000000000099",
+            headers=_auth_headers(admin_token),
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+
+
+class TestAuditLogSecurity:
+    async def test_no_password_in_audit_log_detail(self, client: AsyncClient, admin_token):
+        r = await client.get("/api/audit-log", headers=_auth_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()
+        for item in data["items"]:
+            detail_str = json.dumps(item.get("detail") or {})
+            assert "password" not in detail_str
+            assert "hashed_password" not in detail_str
+
+    async def test_audit_log_not_exposed_to_non_admins(self, client: AsyncClient, manager_token, staff_token):
+        for token in [manager_token, staff_token]:
+            r = await client.get("/api/audit-log", headers=_auth_headers(token))
+            assert r.status_code == 403
+
+
+async def _seed_audit_records(pool, count=1, actions=None, actor_id=None, target_id=None):
+    if actions is None:
+        actions = ["USER_CREATED"]
+    admin = await get_user_by_email(ADMIN_EMAIL)
+    act_id = actor_id or str(admin["id"])
+    async with pool.acquire() as conn:
+        for i in range(count):
+            act = actions[i % len(actions)]
+            await conn.execute(
+                """
+                INSERT INTO audit_log (actor_user_id, target_user_id, action, detail)
+                VALUES ($1, $2, $3, $4::jsonb)
+                """,
+                act_id,
+                target_id,
+                act,
+                json.dumps({"test_index": i, "action": act}),
+            )

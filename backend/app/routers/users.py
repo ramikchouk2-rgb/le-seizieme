@@ -1,8 +1,10 @@
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.deps import require_roles
+from app.models.audit import AuditLogItem, AuditLogListResponse
 from app.models.users import (
     DeactivateResponse,
     UserCreateRequest,
@@ -11,6 +13,7 @@ from app.models.users import (
     UserListResponse,
     UserUpdateRequest,
 )
+from app.services.audit_service import list_audit_logs
 from app.services.user_service import (
     create_user,
     deactivate_user,
@@ -20,6 +23,35 @@ from app.services.user_service import (
 )
 
 router = APIRouter()
+
+
+@router.get("/audit-log", response_model=AuditLogListResponse, dependencies=[Depends(require_roles("ADMIN"))])
+async def list_audit_log_endpoint(
+    action: Optional[str] = Query(default=None),
+    actor_user_id: Optional[str] = Query(default=None),
+    target_user_id: Optional[str] = Query(default=None),
+    created_after: Optional[datetime] = Query(default=None),
+    created_before: Optional[datetime] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> AuditLogListResponse:
+    items, total = await list_audit_logs(
+        action=action,
+        actor_user_id=actor_user_id,
+        target_user_id=target_user_id,
+        created_after=created_after,
+        created_before=created_before,
+        page=page,
+        page_size=page_size,
+    )
+    total_pages = max(1, -(-total // page_size))
+    return AuditLogListResponse(
+        items=[AuditLogItem(**item) for item in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/users", response_model=UserListResponse, dependencies=[Depends(require_roles("ADMIN"))])
