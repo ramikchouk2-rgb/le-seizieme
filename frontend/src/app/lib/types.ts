@@ -369,3 +369,60 @@ export interface EventDetailData {
     total_passengers: number;
   };
 }
+
+export const USER_ROLES = {
+  ADMIN: 'Administrateur',
+  MANAGER: 'Manager',
+  STAFF: 'Serveur',
+} as const;
+
+export type UserRole = keyof typeof USER_ROLES;
+
+export const USER_ROLE_OPTIONS: { value: UserRole; label: string }[] = [
+  { value: 'ADMIN', label: USER_ROLES.ADMIN },
+  { value: 'MANAGER', label: USER_ROLES.MANAGER },
+  { value: 'STAFF', label: USER_ROLES.STAFF },
+];
+
+export interface UserListItem {
+  id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UserListResponse {
+  items: UserListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export type UserFilters = {
+  search: string;
+  role: string;
+  is_active: string;
+};
+
+export interface UserCreateRequest {
+  email: string;
+  password: string;
+  role: UserRole;
+  is_active: boolean;
+}
+
+export interface UserUpdateRequest {
+  email?: string;
+  role?: UserRole;
+  is_active?: boolean;
+  password?: string;
+}
+
+export interface DeactivateResponse {
+  id: string;
+  is_active: boolean;
+  message: string;
+}

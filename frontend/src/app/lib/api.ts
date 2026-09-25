@@ -10,6 +10,11 @@ import type {
   ServerStats,
   ServerUpdateRequest,
   WorkerType,
+  UserListItem,
+  UserListResponse,
+  UserCreateRequest,
+  UserUpdateRequest,
+  DeactivateResponse,
 } from '@/app/lib/types';
 
 export type {
@@ -24,6 +29,13 @@ export type {
   ServerUpdateRequest,
   WorkerType,
   EventDetailData,
+  UserRole,
+  UserListItem,
+  UserListResponse,
+  UserFilters,
+  UserCreateRequest,
+  UserUpdateRequest,
+  DeactivateResponse,
 } from '@/app/lib/types';
 export type { LoginResponse, UserResponse } from '@/app/lib/api-client';
 export { ApiError } from '@/app/lib/api-client';
@@ -1034,6 +1046,57 @@ export async function getMonthlyBonuses(year: number, month: number): Promise<Ga
 
 export async function getServerPoints(serverId: string): Promise<ServerPoints> {
   return fetchAPI<ServerPoints>(`/servers/${serverId}/points`);
+}
+
+export interface UserListParams {
+  search?: string;
+  role?: string;
+  is_active?: boolean;
+  page?: number;
+  page_size?: number;
+}
+
+export async function getUsers(params: UserListParams = {}): Promise<UserListResponse> {
+  const query = new URLSearchParams();
+  if (params.search) query.set('search', params.search);
+  if (params.role) query.set('role', params.role);
+  if (params.is_active !== undefined) query.set('is_active', String(params.is_active));
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+
+  const data = await fetchAPI<UserListResponse>(`/users?${query.toString()}`);
+  return data;
+}
+
+export async function getUser(userId: string): Promise<UserListItem | null> {
+  try {
+    return await fetchAPI<UserListItem>(`/users/${userId}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function createUser(payload: UserCreateRequest): Promise<UserListItem> {
+  return fetchAPI<UserListItem>('/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateUser(userId: string, payload: UserUpdateRequest): Promise<UserListItem> {
+  return fetchAPI<UserListItem>(`/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deactivateUser(userId: string): Promise<DeactivateResponse> {
+  return fetchAPI<DeactivateResponse>(`/users/${userId}/deactivate`, {
+    method: 'PATCH',
+  });
 }
 
 export async function awardCompletionPoints(eventId: string): Promise<GamificationAwardResponse> {

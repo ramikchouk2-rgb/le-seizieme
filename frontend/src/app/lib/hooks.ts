@@ -62,6 +62,13 @@ import {
   ServerCreateRequest,
   ServerUpdateRequest,
   ServerResponse,
+  UserCreateRequest,
+  UserUpdateRequest,
+  getUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deactivateUser,
 } from '@/app/lib/api';
 
 export function useEvents(params?: Parameters<typeof getEvents>[0]) {
@@ -678,6 +685,65 @@ export function useExpireUrgentOffer() {
       queryClient.invalidateQueries({ queryKey: ['urgentStatus', variables.eventId] });
       queryClient.invalidateQueries({ queryKey: ['eventDetail', variables.eventId] });
       queryClient.invalidateQueries({ queryKey: ['eventOperations', variables.eventId] });
+    },
+  });
+}
+
+export function useUsers(params?: Parameters<typeof getUsers>[0]) {
+  return useQuery({
+    queryKey: ['users', params],
+    queryFn: () => getUsers(params),
+  });
+}
+
+export function useUsersStats() {
+  return useQuery({
+    queryKey: ['usersStats'],
+    queryFn: () => getUsers({ page: 1, page_size: 1000 }),
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useUser(userId: string) {
+  return useQuery({
+    queryKey: ['userDetail', userId],
+    queryFn: () => getUser(userId),
+    enabled: !!userId,
+  });
+}
+
+export function useCreateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: UserCreateRequest) => createUser(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['usersStats'] });
+    },
+  });
+}
+
+export function useUpdateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, payload }: { userId: string; payload: UserUpdateRequest }) =>
+      updateUser(userId, payload),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['usersStats'] });
+      queryClient.invalidateQueries({ queryKey: ['userDetail', variables.userId] });
+    },
+  });
+}
+
+export function useDeactivateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => deactivateUser(userId),
+    onSuccess: (_, userId) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['usersStats'] });
+      queryClient.invalidateQueries({ queryKey: ['userDetail', userId] });
     },
   });
 }

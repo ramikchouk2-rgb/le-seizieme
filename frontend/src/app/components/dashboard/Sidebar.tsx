@@ -11,18 +11,23 @@ const ROLE_LABELS: Record<string, string> = {
   STAFF: 'Staff',
 };
 
-const menuItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: '🏠', managerOnly: true },
-  { href: '/dashboard/servers', label: 'Serveurs', icon: '👥', managerOnly: false },
-  { href: '/dashboard/events', label: 'Événements', icon: '📅', managerOnly: false },
-  { href: '/dashboard/gamification', label: 'Gamification', icon: '🏆', managerOnly: false },
-];
+  const menuItems = [
+    { href: '/dashboard', label: 'Dashboard', icon: '🏠', managerOnly: true },
+    { href: '/dashboard/servers', label: 'Serveurs', icon: '👥', managerOnly: false },
+    { href: '/dashboard/events', label: 'Événements', icon: '📅', managerOnly: false },
+    { href: '/dashboard/gamification', label: 'Gamification', icon: '🏆', managerOnly: false },
+    { href: '/dashboard/users', label: 'Utilisateurs', icon: '👤', adminOnly: true },
+  ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const user = getCurrentUser();
   const role = (user?.role || '').toUpperCase();
-  const visibleMenuItems = menuItems.filter((item) => !item.managerOnly || role === 'ADMIN' || role === 'MANAGER');
+  const visibleMenuItems = menuItems.filter(
+    (item) =>
+      (!item.managerOnly || role === 'ADMIN' || role === 'MANAGER') &&
+      (!item.adminOnly || role === 'ADMIN'),
+  );
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0f0f0f] text-[#e5e5e5] flex flex-col z-50">
