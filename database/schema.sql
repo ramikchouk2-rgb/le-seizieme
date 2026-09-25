@@ -478,6 +478,27 @@ CREATE INDEX idx_bonus_rules_active ON bonus_rules(active) WHERE active = TRUE;
 
 
 -- ===================================================
+-- AUDIT_LOG
+-- ===================================================
+
+CREATE TYPE admin_audit_action AS ENUM ('USER_CREATED', 'USER_UPDATED', 'USER_DEACTIVATED');
+
+CREATE TABLE audit_log (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    actor_user_id   UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    target_user_id  UUID REFERENCES users(id) ON DELETE SET NULL,
+    action          admin_audit_action NOT NULL,
+    detail          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_audit_log_actor ON audit_log(actor_user_id);
+CREATE INDEX idx_audit_log_target ON audit_log(target_user_id);
+CREATE INDEX idx_audit_log_action ON audit_log(action);
+CREATE INDEX idx_audit_log_created_at ON audit_log(created_at DESC);
+
+
+-- ===================================================
 -- TRIGGERS
 -- ===================================================
 

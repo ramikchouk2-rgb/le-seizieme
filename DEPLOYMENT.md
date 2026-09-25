@@ -214,6 +214,7 @@ For databases initialized with an older version of `schema.sql`, apply migration
 cd database/migrations
 psql -U <production-user> -d le_seizieme -f 20240817_attendance.sql
 psql -U <production-user> -d le_seizieme -f 20240818_authentication.sql
+psql -U <production-user> -d le_seizieme -f 20240915_audit_log.sql
 ```
 
 #### Bootstrap Admin User
@@ -522,6 +523,7 @@ Scripts are provided in the `scripts/` directory:
 ## Notes
 
 - No automated migration runner (e.g., Alembic) is configured. Schema changes are applied via raw SQL files in `database/migrations/`.
+- The `20240915_audit_log.sql` migration is safely repeatable: it uses `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and a `DO $$` guard for the enum type. Re-running it on an already-applied database is harmless.
 - JWT secret key must be rotated periodically in production
 - Database credentials should use a dedicated application user with least-privilege access
 - Production logs should be monitored for unhandled exceptions

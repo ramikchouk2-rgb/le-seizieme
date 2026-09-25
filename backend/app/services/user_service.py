@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from app.core.database import get_pool
 from app.core.security import hash_password
 from app.models.users import ALLOWED_ROLES
+from app.services.audit_service import log_audit_action
 
 
 def _normalize_email(email: str) -> str:
@@ -110,7 +111,7 @@ async def get_user(user_id: str) -> dict[str, Any] | None:
         }
 
 
-async def create_user(data: dict[str, Any]) -> dict[str, Any]:
+async def create_user(data: dict[str, Any], actor_id: str) -> dict[str, Any]:
     email = _normalize_email(data["email"])
     role = data.get("role", "STAFF")
     is_active = data.get("is_active", True)
@@ -160,6 +161,13 @@ async def create_user(data: dict[str, Any]) -> dict[str, Any]:
                 role,
                 is_active,
             )
+            await log_audit_action(
+                conn,
+                actor_id,
+                "USER_CREATED",
+                {"email": row["email"], "role": row["role"]},
+                target_id=str(row["id"]),
+            )
             return {
                 "id": str(row["id"]),
                 "email": row["email"],
@@ -184,7 +192,7 @@ async def count_active_admins(conn, exclude_user_id: str | None = None) -> int:
     return result or 0
 
 
-async def update_user(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
+async def update_user(user_id: str, data: dict[str, Any], actor_id: str) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -198,22 +206,25 @@ async def update_user(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
             set_clauses = []
             params: list[Any] = []
             idx = 1
+            changes: dict[str, Any] = {}
 
             if "email" in data and data["email"] is not None:
                 new_email = _normalize_email(data["email"])
-                conflict = await conn.fetchrow(
-                    "SELECT id FROM users WHERE email = $1 AND id <> $2",
-                    new_email,
-                    user_id,
-                )
-                if conflict:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Un utilisateur avec cet email existe déjà.",
+                if new_email != current["email"]:
+                    conflict = await conn.fetchrow(
+                        "SELECT id FROM users WHERE email = $1 AND id <> $2",
+                        new_email,
+                        user_id,
                     )
-                set_clauses.append(f"email = ${idx}")
-                params.append(new_email)
-                idx += 1
+                    if conflict:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="Un utilisateur avec cet email existe déjà.",
+                        )
+                    set_clauses.append(f"email = ${idx}")
+                    params.append(new_email)
+                    changes["email"] = {"old": current["email"], "new": new_email}
+                    idx += 1
 
             if "role" in data and data["role"] is not None:
                 role_value = data["role"]
@@ -222,16 +233,18 @@ async def update_user(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Rôle invalide.",
                     )
-                if role_value != "ADMIN" and current["role"] == "ADMIN" and current["is_active"]:
-                    other_admins = await count_active_admins(conn, exclude_user_id=user_id)
-                    if other_admins < 1:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail="Impossible de retirer le rôle ADMIN du dernier administrateur actif.",
-                        )
-                set_clauses.append(f"role = ${idx}")
-                params.append(role_value)
-                idx += 1
+                if role_value != current["role"]:
+                    if role_value != "ADMIN" and current["role"] == "ADMIN" and current["is_active"]:
+                        other_admins = await count_active_admins(conn, exclude_user_id=user_id)
+                        if other_admins < 1:
+                            raise HTTPException(
+                                status_code=status.HTTP_409_CONFLICT,
+                                detail="Impossible de retirer le rôle ADMIN du dernier administrateur actif.",
+                            )
+                    set_clauses.append(f"role = ${idx}")
+                    params.append(role_value)
+                    changes["role"] = {"old": current["role"], "new": role_value}
+                    idx += 1
 
             if "password" in data and data["password"] is not None:
                 password = data["password"]
@@ -242,20 +255,23 @@ async def update_user(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
                     )
                 set_clauses.append(f"hashed_password = ${idx}")
                 params.append(hash_password(password))
+                changes["password"] = {"changed": True}
                 idx += 1
 
             if "is_active" in data and data["is_active"] is not None:
                 is_active = bool(data["is_active"])
-                if not is_active and current["role"] == "ADMIN":
-                    other_admins = await count_active_admins(conn, exclude_user_id=user_id)
-                    if other_admins < 1:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail="Impossible de désactiver le dernier administrateur actif.",
-                        )
-                set_clauses.append(f"is_active = ${idx}")
-                params.append(is_active)
-                idx += 1
+                if is_active != bool(current["is_active"]):
+                    if not is_active and current["role"] == "ADMIN":
+                        other_admins = await count_active_admins(conn, exclude_user_id=user_id)
+                        if other_admins < 1:
+                            raise HTTPException(
+                                status_code=status.HTTP_409_CONFLICT,
+                                detail="Impossible de désactiver le dernier administrateur actif.",
+                            )
+                    set_clauses.append(f"is_active = ${idx}")
+                    params.append(is_active)
+                    changes["is_active"] = {"old": bool(current["is_active"]), "new": is_active}
+                    idx += 1
 
             if not set_clauses:
                 row = await conn.fetchrow(
@@ -273,6 +289,13 @@ async def update_user(user_id: str, data: dict[str, Any]) -> dict[str, Any]:
                     RETURNING id, email, role, is_active, created_at, updated_at
                     """,
                     *params,
+                )
+                await log_audit_action(
+                    conn,
+                    actor_id,
+                    "USER_UPDATED",
+                    {"changed_fields": list(changes.keys()), "changes": changes},
+                    target_id=str(row["id"]),
                 )
 
             return {
@@ -318,6 +341,13 @@ async def deactivate_user(user_id: str, actor_id: str) -> dict[str, Any]:
                 RETURNING id, email, role, is_active, created_at, updated_at
                 """,
                 user_id,
+            )
+            await log_audit_action(
+                conn,
+                actor_id,
+                "USER_DEACTIVATED",
+                {"email": row["email"], "role": row["role"]},
+                target_id=str(row["id"]),
             )
             return {
                 "id": str(row["id"]),

@@ -55,15 +55,15 @@ async def get_user_endpoint(user_id: str) -> UserDetail:
     return UserDetail(**data)
 
 
-@router.post("/users", response_model=UserDetail, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_roles("ADMIN"))])
-async def create_user_endpoint(payload: UserCreateRequest) -> UserDetail:
-    data = await create_user(payload.model_dump())
+@router.post("/users", response_model=UserDetail, status_code=status.HTTP_201_CREATED)
+async def create_user_endpoint(payload: UserCreateRequest, current_user: dict = Depends(require_roles("ADMIN"))) -> UserDetail:
+    data = await create_user(payload.model_dump(), current_user["id"])
     return UserDetail(**data)
 
 
-@router.patch("/users/{user_id}", response_model=UserDetail, dependencies=[Depends(require_roles("ADMIN"))])
-async def update_user_endpoint(user_id: str, payload: UserUpdateRequest) -> UserDetail:
-    data = await update_user(user_id, payload.model_dump(exclude_unset=True))
+@router.patch("/users/{user_id}", response_model=UserDetail)
+async def update_user_endpoint(user_id: str, payload: UserUpdateRequest, current_user: dict = Depends(require_roles("ADMIN"))) -> UserDetail:
+    data = await update_user(user_id, payload.model_dump(exclude_unset=True), current_user["id"])
     return UserDetail(**data)
 
 
