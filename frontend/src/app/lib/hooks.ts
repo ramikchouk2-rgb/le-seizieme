@@ -64,11 +64,13 @@ import {
   ServerResponse,
   UserCreateRequest,
   UserUpdateRequest,
+  AuditLogParams,
   getUsers,
   getUser,
   createUser,
   updateUser,
   deactivateUser,
+  getAuditLogs,
 } from '@/app/lib/api';
 
 export function useEvents(params?: Parameters<typeof getEvents>[0]) {
@@ -701,6 +703,13 @@ export function useUsersStats() {
     queryKey: ['usersStats'],
     queryFn: () => getUsers({ page: 1, page_size: 1000 }),
     staleTime: 60 * 1000,
+  });
+}
+
+export function useAuditLogs(params?: Parameters<typeof getAuditLogs>[0]) {
+  return useQuery({
+    queryKey: ['auditLog', params],
+    queryFn: () => getAuditLogs(params),
   });
 }
 

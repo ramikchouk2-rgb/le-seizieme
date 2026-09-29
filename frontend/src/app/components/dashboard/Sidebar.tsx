@@ -17,6 +17,7 @@ const ROLE_LABELS: Record<string, string> = {
     { href: '/dashboard/events', label: 'Événements', icon: '📅', managerOnly: false },
     { href: '/dashboard/gamification', label: 'Gamification', icon: '🏆', managerOnly: false },
     { href: '/dashboard/users', label: 'Utilisateurs', icon: '👤', adminOnly: true },
+    { href: '/dashboard/audit-log', label: 'Journal d\'audit', icon: '📋', adminOnly: true },
   ];
 
 export default function Sidebar() {

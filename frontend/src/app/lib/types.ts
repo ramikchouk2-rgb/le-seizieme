@@ -426,3 +426,41 @@ export interface DeactivateResponse {
   is_active: boolean;
   message: string;
 }
+
+export type AuditLogAction =
+  | 'USER_CREATED'
+  | 'USER_UPDATED'
+  | 'USER_DEACTIVATED';
+
+export interface AuditLogItem {
+  id: string;
+  actor_user_id: string | null;
+  target_user_id: string | null;
+  action: AuditLogAction;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+  actor_email: string | null;
+  target_email: string | null;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export type AuditLogFilters = {
+  action: string;
+  actor_user_id: string;
+  target_user_id: string;
+  created_after: string;
+  created_before: string;
+};
+
+export const AUDIT_LOG_ACTION_OPTIONS: { value: AuditLogAction; label: string }[] = [
+  { value: 'USER_CREATED', label: 'Utilisateur créé' },
+  { value: 'USER_UPDATED', label: 'Utilisateur mis à jour' },
+  { value: 'USER_DEACTIVATED', label: 'Utilisateur désactivé' },
+];

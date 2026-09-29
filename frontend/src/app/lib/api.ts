@@ -15,6 +15,9 @@ import type {
   UserCreateRequest,
   UserUpdateRequest,
   DeactivateResponse,
+  AuditLogItem,
+  AuditLogListResponse,
+  AuditLogFilters,
 } from '@/app/lib/types';
 
 export type {
@@ -36,6 +39,9 @@ export type {
   UserCreateRequest,
   UserUpdateRequest,
   DeactivateResponse,
+  AuditLogItem,
+  AuditLogListResponse,
+  AuditLogFilters,
 } from '@/app/lib/types';
 export type { LoginResponse, UserResponse } from '@/app/lib/api-client';
 export { ApiError } from '@/app/lib/api-client';
@@ -1345,4 +1351,40 @@ export interface ServerPoints {
     description: string | null;
     created_at: string | null;
   }[];
+}
+
+export interface AuditLogParams {
+  action?: string;
+  actor_user_id?: string;
+  target_user_id?: string;
+  created_after?: string;
+  created_before?: string;
+  page?: number;
+  page_size?: number;
+}
+
+function toIsoQueryValue(value?: string): string | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString();
+}
+
+export async function getAuditLogs(params: AuditLogParams = {}): Promise<AuditLogListResponse> {
+  const query = new URLSearchParams();
+  if (params.action) query.set('action', params.action);
+  if (params.actor_user_id) query.set('actor_user_id', params.actor_user_id);
+  if (params.target_user_id) query.set('target_user_id', params.target_user_id);
+
+  const createdAfter = toIsoQueryValue(params.created_after);
+  if (createdAfter) query.set('created_after', createdAfter);
+  const createdBefore = toIsoQueryValue(params.created_before);
+  if (createdBefore) query.set('created_before', createdBefore);
+
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+
+  const queryString = query.toString();
+  const data = await fetchAPI<AuditLogListResponse>(queryString ? `/audit-log?${queryString}` : '/audit-log');
+  return data;
 }
