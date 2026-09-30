@@ -1,23 +1,11 @@
-import math
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.core.config import settings
 from app.core.database import get_pool
 from app.utils.datetime_utils import to_naive_utc
-
-
-def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6371.0
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return round(R * c, 1)
+from app.utils.selection_utils import haversine_km  # noqa: F401  (canonical re-export)
 
 
 def normalize_text(text: str) -> str:
@@ -37,7 +25,7 @@ def serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     return {k: _serialize(v) for k, v in row.items()}
 
 
-from app.utils.event_utils import load_event
+from app.utils.event_utils import load_event, resolve_event_location
 
 
 async def load_event_requirements(event_id: str) -> list[dict[str, Any]]:
@@ -204,8 +192,7 @@ async def generate_staff_recommendations(event_id: str) -> dict[str, Any]:
 
     event_start_raw = event["start_datetime"]
     event_end_raw = event["end_datetime"]
-    event_lat = float(event.get("event_latitude") or settings.DEFAULT_EVENT_LATITUDE)
-    event_lon = float(event.get("event_longitude") or settings.DEFAULT_EVENT_LONGITUDE)
+    event_lat, event_lon, has_exact_location = resolve_event_location(event)
 
     event_start = event_start_raw.isoformat() if isinstance(event_start_raw, datetime) else event_start_raw
     event_end = event_end_raw.isoformat() if isinstance(event_end_raw, datetime) else event_end_raw
@@ -214,6 +201,7 @@ async def generate_staff_recommendations(event_id: str) -> dict[str, Any]:
         "event_id": str(event["id"]),
         "name": event["name"],
         "city": event.get("city_name", ""),
+        "has_exact_location": has_exact_location,
         "start_datetime": event_start,
         "end_datetime": event_end,
         "guest_count": event["guest_count"],
@@ -349,6 +337,7 @@ async def generate_staff_recommendations(event_id: str) -> dict[str, Any]:
                 event_lon,
                 min_assignments,
                 max_assignments,
+                has_exact_location=has_exact_location,
             )
             server_copy["score"] = score
             server_copy["reasons"] = reasons

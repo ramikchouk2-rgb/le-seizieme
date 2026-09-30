@@ -23,6 +23,7 @@ class TransportConfirmationGroupResponse(BaseModel):
     capacity: int
     passenger_count: int
     estimated_distance_km: float | None = None
+    has_exact_location: bool = True
 
 
 class TransportConfirmationResponse(BaseModel):

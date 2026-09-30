@@ -51,6 +51,8 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
     client_name: '',
     city_id: '',
     address: '',
+    latitude: null,
+    longitude: null,
     start_datetime: '',
     end_datetime: '',
     guest_count: 1,
@@ -63,6 +65,9 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
     status: 'PLANNED',
     notes: '',
   });
+
+  const [latitudeInput, setLatitudeInput] = useState('');
+  const [longitudeInput, setLongitudeInput] = useState('');
 
   const [requirements, setRequirements] = useState<RequirementForm[]>([]);
 
@@ -86,10 +91,15 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
   useEffect(() => {
     if (initialData) {
       setForm({
+        // `id` is part of EventCreateRequest and must survive hydration,
+        // otherwise an edit would PATCH /events/ with an empty event id.
+        id: initialData.id,
         name: initialData.name || '',
         client_name: initialData.client_name || '',
         city_id: initialData.city_id || '',
         address: initialData.address || '',
+        latitude: initialData.latitude ?? null,
+        longitude: initialData.longitude ?? null,
         start_datetime: initialData.start_datetime || '',
         end_datetime: initialData.end_datetime || '',
         guest_count: initialData.guest_count || 1,
@@ -102,6 +112,8 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
         status: initialData.status || 'PLANNED',
         notes: initialData.notes || '',
       });
+      setLatitudeInput(initialData.latitude != null ? String(initialData.latitude) : '');
+      setLongitudeInput(initialData.longitude != null ? String(initialData.longitude) : '');
     }
     if (initialRequirements) {
       setRequirements(initialRequirements.map(r => ({
@@ -117,6 +129,19 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
   const totalPositions = useMemo(() => requirements.reduce((sum, r) => sum + r.quantity, 0), [requirements]);
   const requirementTypes = useMemo(() => requirements.length, [requirements]);
 
+  const parseCoordinate = (raw: string, label: string, min: number, max: number): number | null | string => {
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    const parsed = Number(trimmed);
+    if (Number.isNaN(parsed)) {
+      return `La ${label} doit être un nombre.`;
+    }
+    if (parsed < min || parsed > max) {
+      return `La ${label} doit être comprise entre ${min} et ${max}.`;
+    }
+    return parsed;
+  };
+
   const validateForm = (): string | null => {
     if (!form.name.trim()) return 'Le nom de l\'événement est requis.';
     if (!form.client_name.trim()) return 'Le nom du client est requis.';
@@ -126,6 +151,14 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
     if (!form.end_datetime) return 'La date de fin est requise.';
     if (!form.event_type.trim()) return 'Le type d\'événement est requis.';
     if (form.guest_count < 1) return 'Le nombre d\'invités doit être au moins 1.';
+
+    const latitude = parseCoordinate(latitudeInput, 'latitude', -90, 90);
+    if (typeof latitude === 'string') return latitude;
+    const longitude = parseCoordinate(longitudeInput, 'longitude', -180, 180);
+    if (typeof longitude === 'string') return longitude;
+    if ((latitude === null) !== (longitude === null)) {
+      return 'Renseignez la latitude et la longitude, ou laissez les deux vides.';
+    }
 
     const start = new Date(form.start_datetime);
     const end = new Date(form.end_datetime);
@@ -159,11 +192,32 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
     setSubmitting(true);
     setError(null);
     try {
+      const latitude = parseCoordinate(latitudeInput, 'latitude', -90, 90);
+      const longitude = parseCoordinate(longitudeInput, 'longitude', -180, 180);
+
       const payload: EventCreateRequest | EventUpdateRequest = {
         ...form,
         start_datetime: new Date(form.start_datetime).toISOString(),
         end_datetime: new Date(form.end_datetime).toISOString(),
       };
+      // Coordinate payload depends on what the event already stored.
+      //
+      //   create, both empty            -> omit both keys
+      //   create / edit, both provided  -> send both numbers
+      //   edit, stored values cleared   -> send both as null so the backend,
+      //                                     which uses exclude_unset, clears them
+      //   edit, nothing stored & empty  -> omit both keys (nothing to clear)
+      const hadStoredCoordinates = initialData?.latitude != null && initialData?.longitude != null;
+      if (typeof latitude === 'number' && typeof longitude === 'number') {
+        payload.latitude = latitude;
+        payload.longitude = longitude;
+      } else if (mode === 'edit' && hadStoredCoordinates) {
+        payload.latitude = null;
+        payload.longitude = null;
+      } else {
+        delete payload.latitude;
+        delete payload.longitude;
+      }
 
       let eventId: string;
 
@@ -181,8 +235,12 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
           }
         }
       } else {
-        await updateEvent(form.id || '', payload as EventUpdateRequest);
-        eventId = form.id || '';
+        const targetId = form.id || initialData?.id;
+        if (!targetId) {
+          throw new Error('Identifiant de l\'événement manquant.');
+        }
+        await updateEvent(targetId, payload as EventUpdateRequest);
+        eventId = targetId;
       }
 
       onSuccess?.(eventId);
@@ -279,10 +337,49 @@ export default function EventForm({ mode, initialData, initialRequirements, onSu
               id="event-address"
               type="text"
               required
+              placeholder="Adresse complète du lieu de l'événement"
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
               className={inputClass}
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Adresse complète du lieu de l'événement (rue, numéro, quartier).
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <div>
+            <label htmlFor="event-latitude" className="block text-sm font-medium text-gray-700 mb-1">Latitude (optionnel)</label>
+            <input
+              id="event-latitude"
+              type="number"
+              step="any"
+              min={-90}
+              max={90}
+              placeholder="36.8065"
+              value={latitudeInput}
+              onChange={(e) => setLatitudeInput(e.target.value)}
+              className={inputClass}
+            />
+          </div>
+          <div>
+            <label htmlFor="event-longitude" className="block text-sm font-medium text-gray-700 mb-1">Longitude (optionnel)</label>
+            <input
+              id="event-longitude"
+              type="number"
+              step="any"
+              min={-180}
+              max={180}
+              placeholder="10.1815"
+              value={longitudeInput}
+              onChange={(e) => setLongitudeInput(e.target.value)}
+              className={inputClass}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Coordonnées du lieu (entre -90 et 90 pour la latitude, -180 et 180 pour la longitude).
+              Sans coordonnées, le lieu reste indéterminé et les distances sont approximatives.
+            </p>
           </div>
         </div>
       </div>

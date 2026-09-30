@@ -51,6 +51,8 @@ SCORING_WEIGHTS = {
     "workload": 0.05,
 }
 
+NEUTRAL_SCORE = 50.0
+
 
 def compute_candidate_score(
     candidate: dict[str, Any],
@@ -61,6 +63,7 @@ def compute_candidate_score(
     event_lon: float,
     min_assignments: int,
     max_assignments: int,
+    has_exact_location: bool = True,
 ) -> tuple[float, list[str]]:
     reasons: list[str] = []
     scores: dict[str, float] = {}
@@ -97,7 +100,13 @@ def compute_candidate_score(
     lat = candidate.get("current_latitude")
     lon = candidate.get("current_longitude")
     distance = None
-    if lat is not None and lon is not None:
+    if not has_exact_location:
+        # The event has no stored venue coordinates. Measuring a distance from a
+        # technical fallback would present an approximation as a real
+        # server-to-venue distance, so the component is neutralized instead.
+        scores["distance"] = NEUTRAL_SCORE
+        candidate["distance_km"] = None
+    elif lat is not None and lon is not None:
         distance = haversine_km(event_lat, event_lon, float(lat), float(lon))
         if distance <= 20:
             scores["distance"] = 100.0
@@ -110,7 +119,7 @@ def compute_candidate_score(
             reasons.append(f"{distance} km from event")
         candidate["distance_km"] = distance
     else:
-        scores["distance"] = 50.0
+        scores["distance"] = NEUTRAL_SCORE
         candidate["distance_km"] = None
 
     discipline = candidate.get("discipline_score") or 0

@@ -230,6 +230,8 @@ CREATE TABLE events (
     client_name VARCHAR(255) NOT NULL,
     city_id UUID NOT NULL REFERENCES cities(id) ON DELETE RESTRICT,
     address TEXT NOT NULL,
+    latitude NUMERIC(10, 8),
+    longitude NUMERIC(11, 8),
     start_datetime TIMESTAMP NOT NULL,
     end_datetime TIMESTAMP NOT NULL,
     guest_count INTEGER NOT NULL CHECK (guest_count > 0),
@@ -244,13 +246,16 @@ CREATE TABLE events (
     notes TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (end_datetime > start_datetime)
+    CHECK (end_datetime > start_datetime),
+    CHECK (latitude IS NULL OR (latitude >= -90 AND latitude <= 90)),
+    CHECK (longitude IS NULL OR (longitude >= -180 AND longitude <= 180))
 );
 
 CREATE INDEX idx_events_city_id ON events(city_id);
 CREATE INDEX idx_events_start_datetime ON events(start_datetime);
 CREATE INDEX idx_events_status ON events(status);
 CREATE INDEX idx_events_is_urgent ON events(is_urgent) WHERE is_urgent = TRUE;
+CREATE INDEX idx_events_coordinates ON events(latitude, longitude) WHERE latitude IS NOT NULL AND longitude IS NOT NULL;
 
 
 -- ===================================================

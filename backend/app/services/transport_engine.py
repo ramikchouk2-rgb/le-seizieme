@@ -3,7 +3,8 @@ from datetime import datetime
 from typing import Any
 
 from app.core.database import get_pool
-from app.services.selection_engine import generate_staff_recommendations, haversine_km
+from app.services.selection_engine import generate_staff_recommendations
+from app.utils.selection_utils import haversine_km
 
 MAX_PICKUP_DISTANCE_KM = 20
 

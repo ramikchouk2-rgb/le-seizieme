@@ -60,7 +60,11 @@ export default function StaffAssignmentDrawer({ assignment, onClose }: StaffAssi
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className={SECTION}>Distance</p>
-              <p className="text-sm text-gray-900">{(assignment.distance_km ?? 0).toFixed(1)} km</p>
+              <p className="text-sm text-gray-900">
+                {assignment.distance_km === null || assignment.distance_km === undefined
+                  ? 'Distance indisponible'
+                  : `${assignment.distance_km.toFixed(1)} km`}
+              </p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className={SECTION}>Expérience</p>

@@ -7,6 +7,30 @@ class CityResponse(BaseModel):
     name: str
 
 
+def _validate_coordinates(latitude: Optional[float], longitude: Optional[float]) -> None:
+    if latitude is not None and not (-90 <= latitude <= 90):
+        raise ValueError('La latitude doit être comprise entre -90 et 90.')
+    if longitude is not None and not (-180 <= longitude <= 180):
+        raise ValueError('La longitude doit être comprise entre -180 et 180.')
+
+
+class EventCoordinateMixin(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+    @field_validator('latitude')
+    @classmethod
+    def latitude_must_be_in_range(cls, v):
+        _validate_coordinates(v, None)
+        return v
+
+    @field_validator('longitude')
+    @classmethod
+    def longitude_must_be_in_range(cls, v):
+        _validate_coordinates(None, v)
+        return v
+
+
 class EventRequirementDetailResponse(BaseModel):
     requirement_id: str
     role_name: str
@@ -101,7 +125,7 @@ class RequirementResponse(BaseModel):
     missing: int
 
 
-class EventCreateRequest(BaseModel):
+class EventCreateRequest(EventCoordinateMixin):
     name: str
     client_name: str
     city_id: str
@@ -119,7 +143,7 @@ class EventCreateRequest(BaseModel):
     notes: Optional[str] = None
 
 
-class EventUpdateRequest(BaseModel):
+class EventUpdateRequest(EventCoordinateMixin):
     name: Optional[str] = None
     client_name: Optional[str] = None
     city_id: Optional[str] = None
@@ -143,7 +167,7 @@ class EventUpdateRequest(BaseModel):
         return v
 
 
-class EventCreateResponse(BaseModel):
+class EventCreateResponse(EventCoordinateMixin):
     id: str
     name: str
     client_name: str
@@ -164,7 +188,7 @@ class EventCreateResponse(BaseModel):
     updated_at: str
 
 
-class EventDetailResponse(BaseModel):
+class EventDetailResponse(EventCoordinateMixin):
     id: str
     name: str
     client_name: Optional[str] = None
@@ -332,10 +356,12 @@ class EventOperationsResponse(BaseModel):
     alerts: list[OperationalAlert]
 
 
-class EventDetailEventResponse(BaseModel):
+class EventDetailEventResponse(EventCoordinateMixin):
     id: str
     name: str
     city: str
+    city_id: Optional[str] = None
+    address: Optional[str] = None
     start_datetime: str
     end_datetime: str
     guest_count: int

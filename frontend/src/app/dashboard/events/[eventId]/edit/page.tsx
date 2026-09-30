@@ -20,6 +20,8 @@ export default function EditEventPage() {
     client_name: string;
     city_id: string;
     address: string;
+    latitude: number | null;
+    longitude: number | null;
     start_datetime: string;
     end_datetime: string;
     guest_count: number;
@@ -46,6 +48,8 @@ export default function EditEventPage() {
         client_name: event.client_name,
         city_id: event.city_id,
         address: event.address,
+        latitude: event.latitude,
+        longitude: event.longitude,
         start_datetime: event.start_datetime,
         end_datetime: event.end_datetime,
         guest_count: event.guest_count,

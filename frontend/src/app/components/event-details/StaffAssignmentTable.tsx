@@ -27,6 +27,32 @@ function SortIcon({ field, active, order }: { field: string; active: boolean; or
   return <span className="text-[#D4AF37] ml-1">{order === 'asc' ? '↑' : '↓'}</span>;
 }
 
+/**
+ * A null distance means the distance is UNKNOWN, not zero. It is rendered as an
+ * em dash so an unknown value is never presented as a measured "0.0 km".
+ */
+function formatDistance(distanceKm: number | null | undefined): string {
+  if (distanceKm === null || distanceKm === undefined) return '—';
+  return `${distanceKm.toFixed(1)} km`;
+}
+
+/**
+ * Comparator for the distance column. Known distances sort numerically in the
+ * requested direction and unknown ones are always pushed last, so a null is
+ * never ordered as if it were 0 km.
+ */
+function compareDistance(
+  a: number | null | undefined,
+  b: number | null | undefined,
+  sortOrder: 'asc' | 'desc'
+): number {
+  const aKnown = a !== null && a !== undefined;
+  const bKnown = b !== null && b !== undefined;
+  if (aKnown !== bKnown) return aKnown ? -1 : 1;
+  if (!aKnown) return 0;
+  return sortOrder === 'asc' ? (a as number) - (b as number) : (b as number) - (a as number);
+}
+
 export default function StaffAssignmentTable({
   assignments,
   onSelect,
@@ -52,6 +78,14 @@ export default function StaffAssignmentTable({
   }
 
   filtered.sort((a, b) => {
+    // The distance column is handled separately: an unknown distance must not
+    // be collapsed to 0 and compared as a real value.
+    if (sortBy === 'distance_km') {
+      const ordered = compareDistance(a.distance_km, b.distance_km, sortOrder);
+      if (ordered !== 0) return ordered;
+      return a.last_name.localeCompare(b.last_name);
+    }
+
     let aVal: string | number = '';
     let bVal: string | number = '';
 
@@ -59,10 +93,6 @@ export default function StaffAssignmentTable({
       case 'score':
         aVal = a.score ?? 0;
         bVal = b.score ?? 0;
-        break;
-      case 'distance_km':
-        aVal = a.distance_km ?? 0;
-        bVal = b.distance_km ?? 0;
         break;
       case 'years_experience':
         aVal = a.years_experience;
@@ -185,7 +215,7 @@ export default function StaffAssignmentTable({
                   </div>
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                  {(assignment.distance_km ?? 0).toFixed(1)} km
+                  {formatDistance(assignment.distance_km)}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
                   {assignment.years_experience} ans

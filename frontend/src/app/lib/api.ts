@@ -110,6 +110,8 @@ export interface EventCreateRequest {
   client_name: string;
   city_id: string;
   address: string;
+  latitude?: number | null;
+  longitude?: number | null;
   start_datetime: string;
   end_datetime: string;
   guest_count: number;
@@ -128,6 +130,8 @@ export interface EventUpdateRequest {
   client_name?: string;
   city_id?: string;
   address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   start_datetime?: string;
   end_datetime?: string;
   guest_count?: number;
@@ -146,6 +150,8 @@ export interface EventCreateResponse {
   client_name: string;
   city_id: string;
   address: string;
+  latitude: number | null;
+  longitude: number | null;
   start_datetime: string;
   end_datetime: string;
   guest_count: number;

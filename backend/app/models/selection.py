@@ -14,6 +14,7 @@ class EventResponse(BaseModel):
     event_id: str
     name: str
     city: str
+    has_exact_location: bool = True
     start_datetime: str
     end_datetime: str
     guest_count: int

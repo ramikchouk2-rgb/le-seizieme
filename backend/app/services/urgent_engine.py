@@ -8,7 +8,6 @@ from app.utils.datetime_utils import now_naive_utc, to_naive_utc
 from app.services.availability_service import get_availability_scheduling_conflict
 from app.services.selection_engine import (
     generate_staff_recommendations,
-    haversine_km,
     load_event_requirements,
     load_server_skills,
     load_skill_names,
@@ -16,8 +15,8 @@ from app.services.selection_engine import (
     normalize_text,
     serialize_row,
 )
-from app.utils.selection_utils import compute_candidate_score
-from app.utils.event_utils import load_event
+from app.utils.selection_utils import compute_candidate_score, haversine_km
+from app.utils.event_utils import load_event, resolve_event_location
 
 URGENT_WAVE_SIZE = 5
 URGENT_OFFER_EXPIRATION_MINUTES = 15
@@ -108,6 +107,11 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
     )
     if event_start is None or event_end is None:
         return {"error": "INVALID_EVENT_DATETIME", "status": "ERROR"}
+
+    # Venue position comes from the event itself only. When the event has no
+    # stored coordinates the fallback is used and the distance component of the
+    # score is neutralized rather than presented as a real venue distance.
+    event_lat, event_lon, has_exact_location = resolve_event_location(event)
 
     excluded_servers: set[str] = set()
     for offer in existing_offers:
@@ -202,10 +206,11 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
                     req,
                     event_start,
                     event_end,
-                    settings.DEFAULT_EVENT_LATITUDE,
-                    settings.DEFAULT_EVENT_LONGITUDE,
+                    event_lat,
+                    event_lon,
                     min_assignments,
                     max_assignments,
+                    has_exact_location=has_exact_location,
                 )
                 eligible.append({**server_copy, "score": score})
 
@@ -404,6 +409,8 @@ async def get_urgent_status(event_id: str) -> dict[str, Any]:
     server_skills = await load_server_skills(server_ids) if server_ids else {}
     skill_names = await load_skill_names()
 
+    event_lat, event_lon, has_exact_location = resolve_event_location(event)
+
     requirements_status: list[dict[str, Any]] = []
     total_required = 0
     total_confirmed = 0
@@ -479,9 +486,7 @@ async def get_urgent_status(event_id: str) -> dict[str, Any]:
         reason = None
         if o.get("status") == "ACCEPTED":
             score = server.get("score")
-            if server.get("current_latitude") and server.get("current_longitude"):
-                event_lat = event.get("event_latitude", settings.DEFAULT_EVENT_LATITUDE)
-                event_lon = event.get("event_longitude", settings.DEFAULT_EVENT_LONGITUDE)
+            if has_exact_location and server.get("current_latitude") and server.get("current_longitude"):
                 distance_km = haversine_km(
                     float(server["current_latitude"]),
                     float(server["current_longitude"]),

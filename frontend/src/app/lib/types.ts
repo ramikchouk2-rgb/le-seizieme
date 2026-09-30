@@ -299,6 +299,8 @@ export interface EventDetailData {
     city_id: string;
     city: string;
     address: string;
+    latitude: number | null;
+    longitude: number | null;
     start_datetime: string;
     end_datetime: string;
     guest_count: number;

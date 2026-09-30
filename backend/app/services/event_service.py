@@ -4,7 +4,6 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from app.core.config import settings
 from app.core.database import get_pool
 from app.utils.datetime_utils import now_naive_utc, to_naive_utc
 from app.utils.selection_utils import compute_candidate_score
@@ -12,7 +11,9 @@ from app.services.availability_service import (
     get_availability_scheduling_conflict,
     get_event_scheduling_conflict,
 )
-from app.services.selection_engine import haversine_km, normalize_text, serialize_row
+from app.services.selection_engine import normalize_text, serialize_row
+from app.utils.event_utils import resolve_event_location
+from app.utils.selection_utils import haversine_km
 
 
 def _normalize_datetime(value: Any) -> datetime | None:
@@ -131,7 +132,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
     async with pool.acquire() as conn:
         event_row = await conn.fetchrow(
             """
-            SELECT id, name, client_name, city_id, address, start_datetime, end_datetime,
+            SELECT id, name, client_name, city_id, address, latitude, longitude,
+                   start_datetime, end_datetime,
                    guest_count, event_type, alcohol_service, food_products_count,
                    priority, is_urgent, required_response_minutes, status, notes
             FROM events
@@ -162,19 +164,7 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
             event_start = None
             event_end = None
 
-        event_lat = settings.DEFAULT_EVENT_LATITUDE
-        event_lon = settings.DEFAULT_EVENT_LONGITUDE
-        city_location = await conn.fetchrow(
-            """
-            SELECT latitude, longitude FROM server_locations
-            WHERE city_id = $1 AND is_current = TRUE
-            LIMIT 1
-            """,
-            event["city_id"],
-        )
-        if city_location:
-            event_lat = float(city_location["latitude"])
-            event_lon = float(city_location["longitude"])
+        event_lat, event_lon, has_exact_location = resolve_event_location(event)
 
         assignments = []
         for a in assignments_raw:
@@ -221,6 +211,7 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                     event_lon=event_lon,
                     min_assignments=0,
                     max_assignments=1,
+                    has_exact_location=has_exact_location,
                 )
             except Exception:
                 score = None
@@ -304,6 +295,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "city_id": str(event.get("city_id")) if event.get("city_id") else None,
                 "city": city_name,
                 "address": event.get("address"),
+                "latitude": float(event["latitude"]) if event.get("latitude") is not None else None,
+                "longitude": float(event["longitude"]) if event.get("longitude") is not None else None,
                 "start_datetime": event_start.isoformat() if event_start is not None else None,
                 "end_datetime": event_end.isoformat() if event_end is not None else None,
                 "guest_count": event["guest_count"],
@@ -578,7 +571,12 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
     async with pool.acquire() as conn:
         async with conn.transaction():
             event_row = await conn.fetchrow(
-                "SELECT id, status, start_datetime, end_datetime FROM events WHERE id = $1",
+                """
+                SELECT id, status, start_datetime, end_datetime,
+                       address, city_id, latitude, longitude
+                FROM events e
+                WHERE e.id = $1
+                """,
                 event_id,
             )
             if not event_row:
@@ -593,6 +591,32 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
             event_end = _normalize_datetime(event_row["end_datetime"])
             if event_start is None or event_end is None:
                 raise HTTPException(status_code=500, detail="Dates de l'événement invalides.")
+
+            # The transport destination is the event venue. It is never derived
+            # from a server's personal GPS position.
+            event_location = {
+                "latitude": event_row["latitude"],
+                "longitude": event_row["longitude"],
+            }
+            event_lat, event_lon, has_exact_location = resolve_event_location(event_location)
+            city_row = await conn.fetchrow(
+                "SELECT name FROM cities WHERE id = $1", event_row["city_id"]
+            )
+            city_name = city_row["name"] if city_row else ""
+            address = event_row["address"] or ""
+            if address and city_name:
+                destination_label = f"{address}, {city_name}"
+            elif address:
+                destination_label = address
+            elif city_name:
+                destination_label = city_name
+            else:
+                destination_label = "Lieu de l'événement"
+            if not has_exact_location:
+                # destination_latitude/longitude are NOT NULL in the schema, so
+                # the technical fallback is stored, but the approximation is
+                # always stated in the label and in has_exact_location.
+                destination_label = f"{destination_label} (position approximative)"
 
             driver_ids = [g["driver_server_id"] for g in groups]
             passenger_ids = []
@@ -831,6 +855,7 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                         "capacity": row.get("seats_total", 0),
                         "passenger_count": passenger_count or 0,
                         "estimated_distance_km": float(row["estimated_distance_km"]) if row["estimated_distance_km"] is not None else None,
+                        "has_exact_location": has_exact_location,
                     })
                     created_passengers += passenger_count or 0
                 return {
@@ -848,6 +873,25 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                 driver_id = g["driver_server_id"]
                 driver_server = server_map[driver_id]
                 driver_name = f"{driver_server.get('first_name', '')} {driver_server.get('last_name', '')}".strip()
+
+                pickup_distance = (
+                    sum(p["distance_km"] for p in g["validated_passengers"])
+                    if g["validated_passengers"]
+                    else 0.0
+                )
+                # Final leg: last pickup -> event venue. Without it the route
+                # stops at the last passenger instead of at the venue.
+                last_leg = 0.0
+                if g["validated_passengers"]:
+                    last_pickup = g["validated_passengers"][-1]
+                    last_leg = haversine_km(
+                        last_pickup["latitude"],
+                        last_pickup["longitude"],
+                        event_lat,
+                        event_lon,
+                    )
+                total_distance = round(pickup_distance + last_leg, 2)
+
                 group_row = await conn.fetchrow(
                     """
                     INSERT INTO transport_groups (
@@ -866,11 +910,11 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                     g["driver_longitude"],
                     f"Depart {driver_name}",
                     event_start,
-                    g["driver_latitude"],
-                    g["driver_longitude"],
-                    "Destination",
-                    round(sum(p["distance_km"] for p in g["validated_passengers"]), 2) if g["validated_passengers"] else 0,
-                    round(sum(p["distance_km"] for p in g["validated_passengers"]) * 2) if g["validated_passengers"] else 0,
+                    event_lat,
+                    event_lon,
+                    destination_label,
+                    total_distance,
+                    round(total_distance * 2),
                 )
                 group_id = group_row["id"]
 
@@ -900,7 +944,8 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                     "vehicle": g["vehicle_label"],
                     "capacity": g["capacity"],
                     "passenger_count": len(g["validated_passengers"]),
-                    "estimated_distance_km": round(sum(p["distance_km"] for p in g["validated_passengers"]), 2) if g["validated_passengers"] else 0,
+                    "estimated_distance_km": total_distance,
+                    "has_exact_location": has_exact_location,
                 })
 
             return {
@@ -1141,14 +1186,14 @@ async def create_event(data: dict[str, Any]) -> dict[str, Any]:
         row = await conn.fetchrow(
             """
             INSERT INTO events (
-                name, client_name, city_id, address,
+                name, client_name, city_id, address, latitude, longitude,
                 start_datetime, end_datetime, guest_count, event_type,
                 alcohol_service, food_products_count,
                 priority, is_urgent, required_response_minutes,
                 status, notes
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            RETURNING id, name, client_name, city_id, address,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            RETURNING id, name, client_name, city_id, address, latitude, longitude,
                       start_datetime, end_datetime, guest_count, event_type,
                       alcohol_service, food_products_count,
                       priority, is_urgent, required_response_minutes,
@@ -1158,6 +1203,8 @@ async def create_event(data: dict[str, Any]) -> dict[str, Any]:
             data["client_name"],
             data["city_id"],
             data["address"],
+            data.get("latitude"),
+            data.get("longitude"),
             start_datetime,
             end_datetime,
             data["guest_count"],
@@ -1170,7 +1217,12 @@ async def create_event(data: dict[str, Any]) -> dict[str, Any]:
             data.get("status", "PLANNED"),
             data.get("notes"),
         )
-        return dict(row)
+        result = dict(row)
+        if result.get("latitude") is not None:
+            result["latitude"] = float(result["latitude"])
+        if result.get("longitude") is not None:
+            result["longitude"] = float(result["longitude"])
+        return result
 
 
 async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1207,6 +1259,20 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
         if "guest_count" in data and data["guest_count"] is not None and data["guest_count"] < 1:
             raise HTTPException(status_code=422, detail="Le nombre d'invités doit être au moins 1.")
 
+        # Validate venue coordinates if provided (belt-and-braces: the API layer
+        # already validates them, and the table carries CHECK constraints).
+        for field, limit in (("latitude", 90), ("longitude", 180)):
+            value = data.get(field)
+            if value is not None and not (-limit <= float(value) <= limit):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"La latitude doit être comprise entre -{limit} et {limit}."
+                        if field == "latitude"
+                        else f"La longitude doit être comprise entre -{limit} et {limit}."
+                    ),
+                )
+
         # Build dynamic update query
         allowed_fields = [
             "name", "client_name", "city_id", "address",
@@ -1215,11 +1281,15 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
             "priority", "is_urgent", "required_response_minutes",
             "notes"
         ]
+        # Coordinates are the only nullable columns a PATCH may clear. Because the
+        # router dumps the payload with exclude_unset=True, a key that is absent
+        # was never provided and is therefore left untouched.
+        nullable_fields = ["latitude", "longitude"]
 
         updates = []
         values = []
         idx = 1
-        for field in allowed_fields:
+        for field in allowed_fields + nullable_fields:
             if field not in data:
                 continue
             value = data[field]
@@ -1231,6 +1301,8 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
                 updates.append(f"{field} = ${idx}")
                 values.append(value)
                 idx += 1
+            elif field in nullable_fields:
+                updates.append(f"{field} = NULL")
 
         if not updates:
             raise HTTPException(status_code=400, detail="Aucune modification fournie.")
@@ -1240,7 +1312,11 @@ async def update_event(event_id: str, data: dict[str, Any]) -> dict[str, Any]:
 
         query = f"UPDATE events SET {', '.join(updates)} WHERE id = ${idx} RETURNING *"
         row = await conn.fetchrow(query, *values)
-        return dict(row)
+        result = dict(row)
+        for field in ("latitude", "longitude"):
+            if result.get(field) is not None:
+                result[field] = float(result[field])
+        return result
 
 
 async def load_cities() -> list[dict[str, Any]]:
