@@ -31,6 +31,13 @@ export interface Event {
   status: string;
   requirements: EventRequirement[];
   selected_count?: number;
+  // Step 24C-D-2: exposed by GET /events/{event_id} since EventDetailEventResponse
+  // declares them. They stay optional here because this interface is shared with
+  // the events list, whose EventListItem payload does not carry them.
+  client_name?: string;
+  event_type?: string;
+  required_response_minutes?: number | null;
+  notes?: string | null;
 }
 
 export interface EventRequirement {

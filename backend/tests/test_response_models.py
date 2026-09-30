@@ -49,10 +49,12 @@ class TestEventDetailResponse:
             event=EventDetailEventResponse(
                 id="e1",
                 name="Test Event",
+                client_name="Client Test",
                 city="Paris",
                 start_datetime="2025-01-01T08:00:00",
                 end_datetime="2025-01-01T17:00:00",
                 guest_count=50,
+                event_type="BANQUET",
                 alcohol_service=False,
                 food_products_count=10,
                 priority="NORMAL",

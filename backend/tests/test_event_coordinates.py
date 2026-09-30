@@ -12,6 +12,7 @@ Covers:
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 import pytest
 
@@ -44,6 +45,11 @@ async def _create_event(
     address="123 Coordinate Street",
     status="PLANNED",
     day=20,
+    client_name="Coordinate Client",
+    event_type="TEST",
+    notes=None,
+    required_response_minutes=None,
+    is_urgent=False,
 ):
     event_id = uuid.uuid4()
     pool = await get_pool()
@@ -52,22 +58,27 @@ async def _create_event(
             """
             INSERT INTO events (
                 id, name, client_name, city_id, address, latitude, longitude,
-                start_datetime, end_datetime, guest_count, event_type, status
+                start_datetime, end_datetime, guest_count, event_type, status,
+                notes, required_response_minutes, is_urgent
             )
             VALUES (
                 $1, $2, $3, (SELECT id FROM cities LIMIT 1), $4, $5, $6,
-                $7, $8, 50, 'TEST', $9
+                $7, $8, 50, $9, $10, $11, $12, $13
             )
             """,
             event_id,
             f"Coordinate Event {event_id}",
-            "Coordinate Client",
+            client_name,
             address,
             latitude,
             longitude,
             datetime(2025, 5, day, 10, 0, 0),
             datetime(2025, 5, day, 14, 0, 0),
+            event_type,
             status,
+            notes,
+            required_response_minutes,
+            is_urgent,
         )
     return str(event_id)
 
@@ -109,6 +120,17 @@ async def _create_server_with_location(
             server_id,
             f"coord-{server_id}@test.com",
             years_experience,
+        )
+        await conn.execute(
+            """
+            INSERT INTO server_profile (
+                server_id, worker_type, speed_score, punctuality_score,
+                presentation_score, communication_score, teamwork_score,
+                discipline_score, endurance_score
+            )
+            VALUES ($1, 'BALANCED', 7, 7, 7, 7, 7, 7, 7)
+            """,
+            server_id,
         )
         await conn.execute(
             "INSERT INTO server_skills (server_id, skill_id, level, years_experience) VALUES ($1, $2, $3, 2)",
@@ -416,6 +438,106 @@ class TestEventDetailLocation:
             await _cleanup([event_id])
 
 
+# --------------------------------------------- C2. Step 24C-D-2 detail contract
+
+
+class TestEventDetailResponseContract:
+    """GET /api/events/{id} must expose the event fields the events table holds.
+
+    Step 24C-D-2: get_event_staff_summary() already selected and emitted
+    client_name, event_type, required_response_minutes and notes, but
+    EventDetailEventResponse did not declare them, so FastAPI's response_model
+    filtering silently dropped all four. These tests pin the corrected contract
+    and guard the fields the previous fix must not have disturbed.
+    """
+
+    async def test_detail_returns_the_four_previously_missing_fields(self):
+        event_id = await _create_event(
+            latitude=VENUE_LAT,
+            longitude=VENUE_LON,
+            address="33 Contract Avenue",
+            client_name="Maison Des JARDins",
+            event_type="MARIAGE",
+            notes="Poolside service, load-in from the service entrance.",
+            required_response_minutes=45,
+        )
+        try:
+            r = client.get(f"/api/events/{event_id}", headers=_admin_headers())
+            assert r.status_code == 200, r.text
+            event = r.json()["event"]
+            assert event["client_name"] == "Maison Des JARDins"
+            assert event["event_type"] == "MARIAGE"
+            assert event["notes"] == "Poolside service, load-in from the service entrance."
+            assert event["required_response_minutes"] == 45
+        finally:
+            await _cleanup([event_id])
+
+    async def test_detail_keeps_nullable_fields_null_when_unset(self):
+        event_id = await _create_event(address="34 Contract Avenue")
+        try:
+            r = client.get(f"/api/events/{event_id}", headers=_admin_headers())
+            assert r.status_code == 200, r.text
+            event = r.json()["event"]
+            # The keys must be present even when the columns are NULL, so the
+            # frontend can rely on the shape rather than probing for it.
+            assert "notes" in event
+            assert "required_response_minutes" in event
+            assert event["notes"] is None
+            assert event["required_response_minutes"] is None
+        finally:
+            await _cleanup([event_id])
+
+    async def test_detail_preserves_the_pre_existing_fields(self):
+        event_id = await _create_event(
+            latitude=VENUE_LAT,
+            longitude=VENUE_LON,
+            address="35 Regression Avenue",
+            status="CONFIRMED",
+            day=24,
+        )
+        try:
+            r = client.get(f"/api/events/{event_id}", headers=_admin_headers())
+            assert r.status_code == 200, r.text
+            body = r.json()
+            event = body["event"]
+            # Fields Step 24C-B introduced must survive the contract change.
+            assert event["city_id"] is not None
+            assert event["address"] == "35 Regression Avenue"
+            assert event["latitude"] == pytest.approx(VENUE_LAT)
+            assert event["longitude"] == pytest.approx(VENUE_LON)
+            # Fields that predate both steps must survive too.
+            assert event["id"] == event_id
+            assert event["name"].startswith("Coordinate Event")
+            assert event["guest_count"] == 50
+            assert event["status"] == "CONFIRMED"
+            assert event["priority"]
+            assert event["alcohol_service"] is False
+            assert event["food_products_count"] == 0
+            assert event["urgent"] is False
+            # And the surrounding envelope is untouched.
+            assert set(body) == {"event", "staffing", "requirements", "assignments", "transport"}
+            assert set(body["staffing"]) == {"requested", "selected", "missing", "percentage"}
+        finally:
+            await _cleanup([event_id])
+
+    async def test_event_detail_event_response_declares_the_four_fields(self):
+        # Structural guard: a future edit that removes one of the four fields
+        # from the response model must fail here, not silently shrink the API.
+        from app.models.events import EventDetailEventResponse
+
+        fields = EventDetailEventResponse.model_fields
+        for field in ("client_name", "event_type", "required_response_minutes", "notes"):
+            assert field in fields, f"EventDetailEventResponse lost '{field}'"
+        # client_name and event_type are NOT NULL in the events table, so they
+        # must stay required; the other two are genuinely nullable.
+        assert fields["client_name"].is_required()
+        assert fields["event_type"].is_required()
+        assert not fields["required_response_minutes"].is_required()
+        assert not fields["notes"].is_required()
+        assert fields["required_response_minutes"].annotation == Optional[int]
+        assert fields["notes"].annotation == Optional[str]
+
+
 # -------------------------------------------------------------- D. selection
 
 
@@ -642,10 +764,113 @@ class TestTransportDestinationIsVenue:
 
 # ----------------------------------------------------------------- F. privacy
 
+# Every field name that would indicate a raw geographic fix crossing the API
+# boundary. `server_locations` is the only source of a server's personal GPS;
+# none of these may ever be projected into a response model or payload.
+SERVER_GPS_FIELDS = frozenset(
+    {
+        "latitude",
+        "longitude",
+        "current_latitude",
+        "current_longitude",
+        "pickup_latitude",
+        "pickup_longitude",
+        "departure_latitude",
+        "departure_longitude",
+        "destination_latitude",
+        "destination_longitude",
+    }
+)
+
+# The single legitimate exception: the event venue on the event-detail payload.
+# An event's coordinates describe a place, not a person, and Step 24C-B made
+# them first-class event data. They are asserted to be PRESENT here, so the
+# allowlist cannot be used to quietly delete them.
+ALLOWED_VENUE_PATHS = frozenset({"$.event.latitude", "$.event.longitude"})
+
+# A server's personal GPS fixture, deliberately far from VENUE_LAT/VENUE_LON so
+# the two value sets can never be confused.
+SERVER_LAT = 48.8566
+SERVER_LON = 2.3522
+SERVER_GPS_VALUES = ("48.8566", "2.3522")
+
+# Endpoints whose response models may contain server, driver or passenger data.
+# Read from the live routing table at test time, so a newly added endpoint is
+# not silently excluded from the static check below.
+SERVER_DATA_ENDPOINTS = (
+    ("/api/servers", "GET"),
+    ("/api/servers/stats", "GET"),
+    ("/api/servers/{server_id}", "GET"),
+    ("/api/servers/{server_id}/points", "GET"),
+    ("/api/servers/{server_id}/availability", "GET"),
+    ("/api/servers/{server_id}/availability/check", "GET"),
+    ("/api/events/{event_id}", "GET"),
+    ("/api/events/{event_id}/operations", "GET"),
+    ("/api/events/{event_id}/eligible-staff", "GET"),
+    ("/api/events/{event_id}/report", "GET"),
+    ("/api/events/{event_id}/attendance", "GET"),
+    ("/api/events/{event_id}/urgent-status", "GET"),
+    ("/api/events/{event_id}/generate-staff", "POST"),
+    ("/api/events/{event_id}/recommend-transport", "POST"),
+    ("/api/events/{event_id}/confirm-transport", "POST"),
+    ("/api/events/{event_id}/urgent-offers/generate", "POST"),
+)
+
+
+def _walk_payload(node, path="$"):
+    """Yield every ``(path, dict)`` pair in a decoded JSON payload."""
+    if isinstance(node, dict):
+        yield path, node
+        for key, value in node.items():
+            yield from _walk_payload(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _walk_payload(value, f"{path}[{index}]")
+
+
+def _walk_model(model, path="$"):
+    """Yield every ``(path, field_name)`` pair declared by a Pydantic model."""
+    fields = getattr(model, "model_fields", None)
+    if not fields:
+        return
+    for name, info in fields.items():
+        yield f"{path}.{name}", name
+        annotation = getattr(info, "annotation", None)
+        yield from _walk_model(annotation, f"{path}.{name}")
+        for extra in getattr(info, "metadata", []) or []:
+            yield from _walk_model(extra, f"{path}.{name}")
+
+
+def _assert_no_server_gps(body, label):
+    """Assert a decoded payload carries no raw server GPS.
+
+    Structural first: any GPS-shaped key is rejected unless it is the event
+    venue, which is the only position in the product that is not a person.
+    """
+    for path, node in _walk_payload(body):
+        for key in node:
+            if key in SERVER_GPS_FIELDS:
+                where = f"{path}.{key}"
+                assert where in ALLOWED_VENUE_PATHS, (
+                    f"{label}: raw GPS field '{key}' exposed at {where}"
+                )
+    # Value-level: the fixture's own coordinates must appear nowhere at all,
+    # which also catches a leak expressed as a bare number or a nested string.
+    serialized = str(body)
+    for value in SERVER_GPS_VALUES:
+        assert value not in serialized, f"{label}: server GPS value {value} leaked"
+
+
+def _response_model_for(path, method):
+    for route in app.routes:
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
+            return getattr(route, "response_model", None)
+    return None
+
 
 class TestServerGpsNotExposed:
     async def test_server_endpoints_never_return_raw_gps(self):
-        server_id, _, _ = await _create_server_with_location(48.8566, 2.3522)
+        server_id, _, _ = await _create_server_with_location(SERVER_LAT, SERVER_LON)
         headers = _admin_headers()
         try:
             for url in (
@@ -654,15 +879,15 @@ class TestServerGpsNotExposed:
             ):
                 r = client.get(url, headers=headers)
                 assert r.status_code == 200, f"{url} -> {r.status_code}"
-                body = r.json()
-                serialized = str(body)
-                for banned in ("latitude", "longitude", "48.8566", "2.3522"):
+                _assert_no_server_gps(r.json(), url)
+                serialized = str(r.json())
+                for banned in SERVER_GPS_FIELDS:
                     assert banned not in serialized, f"{banned} leaked by {url}"
         finally:
             await _cleanup([], [server_id], [server_id])
 
     async def test_staff_recommendation_never_returns_raw_gps(self):
-        server_id, skill, skill_id = await _create_server_with_location(48.8566, 2.3522)
+        server_id, skill, skill_id = await _create_server_with_location(SERVER_LAT, SERVER_LON)
         event_id = await _create_event(latitude=VENUE_LAT, longitude=VENUE_LON, day=23)
         req_id = await _create_requirement(event_id, skill, skill_id)
         try:
@@ -670,7 +895,9 @@ class TestServerGpsNotExposed:
                 f"/api/events/{event_id}/generate-staff", headers=_admin_headers()
             )
             assert r.status_code == 200, r.text
-            serialized = str(r.json())
+            body = r.json()
+            _assert_no_server_gps(body, "generate-staff")
+            serialized = str(body)
             for banned in ("current_latitude", "current_longitude", "48.8566", "2.3522"):
                 assert banned not in serialized, f"{banned} leaked by staff recommendations"
         finally:
@@ -678,3 +905,232 @@ class TestServerGpsNotExposed:
             pool = await get_pool()
             async with pool.acquire() as conn:
                 await conn.execute("DELETE FROM skills WHERE name = $1", skill)
+
+
+class TestServerGpsNeverCrossesTheApiBoundary:
+    """Step 24C-D-1: broaden the privacy net beyond the two original endpoints.
+
+    The original suite proved /api/servers and generate-staff were clean. Event
+    detail, operations, eligible-staff, urgent-status, availability and both
+    transport endpoints all surface server, driver or passenger records and were
+    previously unchecked.
+    """
+
+    async def _seed_full_event(self, day):
+        """Event + server + requirement + assignment + vehicle + transport."""
+        driver_id, driver_skill, driver_skill_id = await _create_server_with_location(
+            SERVER_LAT, SERVER_LON, day=day
+        )
+        passenger_id, _, _ = await _create_server_with_location(
+            SERVER_LAT + 0.02, SERVER_LON + 0.01, day=day
+        )
+        event_id = await _create_event(
+            latitude=VENUE_LAT,
+            longitude=VENUE_LON,
+            address="57 Privacy Avenue",
+            status="CONFIRMED",
+            day=day,
+            is_urgent=True,
+        )
+        await _create_requirement(event_id, driver_skill, driver_skill_id)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO event_staff (event_id, server_id, role, assignment_status, confirmed_at)
+                VALUES ($1, $2, 'Driver', 'CONFIRMED', NOW())
+                """,
+                event_id,
+                driver_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO event_staff (event_id, server_id, role, assignment_status, confirmed_at)
+                VALUES ($1, $2, 'Guest', 'CONFIRMED', NOW())
+                """,
+                event_id,
+                passenger_id,
+            )
+            vehicle_id = await conn.fetchval(
+                """
+                INSERT INTO vehicles (owner_server_id, vehicle_type, brand, model, seats_total, can_transport_coworkers, is_active)
+                VALUES ($1, 'CAR', 'Privacy', 'Test', 4, TRUE, TRUE)
+                RETURNING id
+                """,
+                driver_id,
+            )
+        return event_id, driver_id, passenger_id, vehicle_id, driver_skill
+
+    async def _teardown(self, event_id, driver_id, passenger_id, vehicle_id, skill):
+        await _cleanup([event_id], [driver_id, passenger_id], [driver_id, passenger_id])
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM vehicles WHERE id = $1", vehicle_id)
+            await conn.execute("DELETE FROM skills WHERE name = $1", skill)
+
+    async def test_event_scoped_endpoints_never_return_raw_server_gps(self):
+        event_id, driver_id, passenger_id, vehicle_id, skill = await self._seed_full_event(day=25)
+        headers = _admin_headers()
+        try:
+            # Confirm transport first so the transport sections are populated.
+            confirm = client.post(
+                f"/api/events/{event_id}/confirm-transport",
+                json={
+                    "groups": [
+                        {
+                            "driver_server_id": driver_id,
+                            "passengers": [{"server_id": passenger_id, "pickup_order": 1}],
+                        }
+                    ]
+                },
+                headers=headers,
+            )
+            assert confirm.status_code == 200, confirm.text
+
+            probes = [
+                ("GET", f"/api/events/{event_id}", None),
+                ("GET", f"/api/events/{event_id}/operations", None),
+                ("GET", f"/api/events/{event_id}/eligible-staff", None),
+                ("GET", f"/api/events/{event_id}/urgent-status", None),
+                ("GET", f"/api/events/{event_id}/attendance", None),
+                ("GET", f"/api/servers/{driver_id}", None),
+                ("GET", f"/api/servers/{driver_id}/availability", None),
+                ("GET", f"/api/servers/{driver_id}/availability/check?event_id={event_id}", None),
+                ("GET", f"/api/servers/{driver_id}/points", None),
+                ("GET", "/api/servers?location_verified=true", None),
+                ("POST", f"/api/events/{event_id}/generate-staff", None),
+                ("POST", f"/api/events/{event_id}/recommend-transport", None),
+            ]
+            for method, url, _ in probes:
+                if method == "GET":
+                    r = client.get(url, headers=headers)
+                else:
+                    r = client.post(url, headers=headers)
+                assert r.status_code == 200, f"{method} {url} -> {r.status_code}: {r.text}"
+                _assert_no_server_gps(r.json(), f"{method} {url}")
+        finally:
+            await self._teardown(event_id, driver_id, passenger_id, vehicle_id, skill)
+
+    async def test_transport_endpoints_never_return_raw_server_gps(self):
+        event_id, driver_id, passenger_id, vehicle_id, skill = await self._seed_full_event(day=26)
+        headers = _admin_headers()
+        try:
+            for url, body in (
+                (f"/api/events/{event_id}/recommend-transport", None),
+                (
+                    f"/api/events/{event_id}/confirm-transport",
+                    {
+                        "groups": [
+                            {
+                                "driver_server_id": driver_id,
+                                "passengers": [{"server_id": passenger_id, "pickup_order": 1}],
+                            }
+                        ]
+                    },
+                ),
+            ):
+                r = client.post(url, json=body, headers=headers)
+                assert r.status_code == 200, f"{url} -> {r.status_code}: {r.text}"
+                _assert_no_server_gps(r.json(), url)
+        finally:
+            await self._teardown(event_id, driver_id, passenger_id, vehicle_id, skill)
+
+    async def test_event_detail_exposes_venue_coordinates_but_no_server_coordinates(self):
+        """The two kinds of coordinates must stay distinguishable.
+
+        The event venue is legitimate event data and must be present. The
+        server's own position must be absent even though the payload also
+        contains assigned servers and a confirmed transport plan.
+        """
+        event_id, driver_id, passenger_id, vehicle_id, skill = await self._seed_full_event(day=27)
+        try:
+            confirm = client.post(
+                f"/api/events/{event_id}/confirm-transport",
+                json={
+                    "groups": [
+                        {
+                            "driver_server_id": driver_id,
+                            "passengers": [{"server_id": passenger_id, "pickup_order": 1}],
+                        }
+                    ]
+                },
+                headers=_admin_headers(),
+            )
+            assert confirm.status_code == 200, confirm.text
+
+            r = client.get(f"/api/events/{event_id}", headers=_admin_headers())
+            assert r.status_code == 200, r.text
+            body = r.json()
+
+            # Venue present and correct.
+            assert body["event"]["latitude"] == pytest.approx(VENUE_LAT)
+            assert body["event"]["longitude"] == pytest.approx(VENUE_LON)
+
+            # Server records really are in this payload, so the absence of
+            # their GPS is a meaningful assertion rather than a vacuous one.
+            assert body["assignments"], "expected assigned servers in the detail payload"
+            assigned_ids = {a["server_id"] for a in body["assignments"]}
+            assert {driver_id, passenger_id} <= assigned_ids
+            assert body["transport"]["groups"], "expected a confirmed transport group"
+            group = body["transport"]["groups"][0]
+            assert group["driver_name"]
+            assert group["passengers"]
+
+            # ...and none of it carries a raw fix.
+            _assert_no_server_gps(body, "GET /api/events/{id}")
+        finally:
+            await self._teardown(event_id, driver_id, passenger_id, vehicle_id, skill)
+
+    def test_response_models_declare_no_server_gps_field(self):
+        """Static net over every server-data-bearing endpoint.
+
+        Reads the live routing table, so this fails both when an existing model
+        grows a GPS field and when a new server-facing endpoint is added.
+        """
+        checked = 0
+        for path, method in SERVER_DATA_ENDPOINTS:
+            model = _response_model_for(path, method)
+            assert model is not None, f"no response_model registered for {method} {path}"
+            declared = dict(_walk_model(model))
+            for where, field in declared.items():
+                if field not in SERVER_GPS_FIELDS:
+                    continue
+                assert where in ALLOWED_VENUE_PATHS, (
+                    f"{method} {path}: response model declares raw GPS field "
+                    f"'{field}' at {where}"
+                )
+            if path == "/api/events/{event_id}":
+                # The allowlist must stay honest: the venue really is declared.
+                assert "$.event.latitude" in declared
+                assert "$.event.longitude" in declared
+            checked += 1
+        assert checked == len(SERVER_DATA_ENDPOINTS)
+
+    def test_server_location_is_only_reachable_through_the_is_verified_flag(self):
+        """server_locations exposes a boolean, never the coordinates."""
+        from app.models.servers import ServerLocationResponse
+
+        fields = set(ServerLocationResponse.model_fields)
+        assert fields == {"city", "area", "is_verified"}
+        assert not (fields & SERVER_GPS_FIELDS)
+
+    async def test_urgent_offer_generation_never_returns_raw_server_gps(self):
+        """The urgent path is checked at the engine level.
+
+        Step 24C-D-3 fixed the response contract on this endpoint (it emitted
+        raw `id` rows where UrgentGenerateResponse declares `offer_id`, so it
+        500'd whenever a real offer was generated). The HTTP-level regression
+        for that now lives in tests/test_urgent_offers.py; this test keeps the
+        engine-level GPS assertion so the urgent path stays covered here too.
+        """
+        from app.services.urgent_engine import generate_urgent_offers
+
+        event_id, driver_id, passenger_id, vehicle_id, skill = await self._seed_full_event(day=28)
+        try:
+            result = await generate_urgent_offers(event_id)
+            assert "error" not in result, result
+            offers = result.get("offers") or []
+            assert offers, "expected at least one urgent offer to inspect"
+            _assert_no_server_gps(result, "generate_urgent_offers")
+        finally:
+            await self._teardown(event_id, driver_id, passenger_id, vehicle_id, skill)

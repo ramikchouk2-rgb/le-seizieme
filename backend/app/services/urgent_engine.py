@@ -234,12 +234,29 @@ async def generate_urgent_offers(event_id: str) -> dict[str, Any]:
                 )
                 offer_row = serialize_row(dict(row))
                 server_name = f"{sel.get('first_name', '')} {sel.get('last_name', '')}".strip()
-                offer_row["server_name"] = server_name
-                offer_row["role"] = req["role_name"]
-                offer_row["score"] = sel.get("score")
-                offer_row["distance_km"] = None
-                offer_row["reason"] = None
-                offers_created.append(offer_row)
+                # Step 24C-D-3: emit the canonical UrgentOfferResponse shape.
+                # The INSERT returns the row keyed by `id`, but every consumer of
+                # this contract uses `offer_id`: UrgentOfferResponse, the frontend
+                # UrgentOffer type, UrgentStaffingPanel, the accept/decline/expire
+                # routes and get_urgent_status() below. Returning `id` here made
+                # the router's response_model validation fail with HTTP 500 as
+                # soon as a real offer was generated, while the zero-offer path
+                # masked the bug because an empty list validates.
+                offers_created.append(
+                    {
+                        "offer_id": str(offer_row["id"]),
+                        "server_id": str(offer_row["server_id"]),
+                        "server_name": server_name,
+                        "role": req["role_name"],
+                        "status": offer_row.get("status", "PENDING"),
+                        "wave_number": offer_row.get("wave_number") or 0,
+                        "created_at": offer_row.get("sent_at"),
+                        "expires_at": offer_row.get("response_deadline"),
+                        "score": sel.get("score"),
+                        "distance_km": None,
+                        "reason": None,
+                    }
+                )
 
     return {
         "event_id": event_id,

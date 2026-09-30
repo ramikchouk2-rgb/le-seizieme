@@ -188,27 +188,6 @@ class EventCreateResponse(EventCoordinateMixin):
     updated_at: str
 
 
-class EventDetailResponse(EventCoordinateMixin):
-    id: str
-    name: str
-    client_name: Optional[str] = None
-    city_id: Optional[str] = None
-    city: str
-    address: Optional[str] = None
-    start_datetime: str
-    end_datetime: str
-    guest_count: int
-    event_type: Optional[str] = None
-    alcohol_service: bool
-    food_products_count: int
-    priority: str
-    is_urgent: bool
-    required_response_minutes: Optional[int] = None
-    status: str
-    notes: Optional[str] = None
-    requirements: list[EventRequirementDetailResponse]
-
-
 class EventStaffResponse(BaseModel):
     id: str
     server_id: str
@@ -357,19 +336,28 @@ class EventOperationsResponse(BaseModel):
 
 
 class EventDetailEventResponse(EventCoordinateMixin):
+    # Step 24C-D-2: client_name, event_type, required_response_minutes and
+    # notes were already selected and emitted by get_event_staff_summary(), but
+    # because this model did not declare them the response_model filtered them
+    # out and the detail payload silently lost four fields that the events table
+    # has always held. They are declared here so the contract matches reality.
     id: str
     name: str
+    client_name: str
     city: str
     city_id: Optional[str] = None
     address: Optional[str] = None
     start_datetime: str
     end_datetime: str
     guest_count: int
+    event_type: str
     alcohol_service: bool
     food_products_count: int
     priority: str
     urgent: bool
+    required_response_minutes: Optional[int] = None
     status: str
+    notes: Optional[str] = None
 
 
 class EventDetailStaffingResponse(BaseModel):
@@ -398,6 +386,11 @@ class EventDetailTransportResponse(BaseModel):
 
 
 class EventDetailResponse(BaseModel):
+    # Step 24C-D-3: this is the live event-detail envelope served by
+    # GET /events/{event_id}. A flat EventDetailResponse previously also existed
+    # earlier in this file; Python rebound the module name to this class, so the
+    # earlier one was unreachable and any edit to it had no effect on the API.
+    # It has been removed. Do not reintroduce a second EventDetailResponse.
     event: EventDetailEventResponse
     staffing: EventDetailStaffingResponse
     requirements: list[EventRequirementDetailResponse]
