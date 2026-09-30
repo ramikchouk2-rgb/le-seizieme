@@ -67,6 +67,7 @@ async def get_event_scheduling_conflict(
         FROM event_staff es
         JOIN events e ON e.id = es.event_id
         WHERE es.server_id = $1
+          AND es.assignment_status = 'CONFIRMED'
           AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
           AND e.start_datetime < $3
           AND e.end_datetime > $2
@@ -106,6 +107,7 @@ async def get_availability_scheduling_conflict(
         FROM events e
         JOIN event_staff es ON e.id = es.event_id
         WHERE es.server_id = $1
+          AND es.assignment_status = 'CONFIRMED'
           AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
           AND e.start_datetime < $3
           AND e.end_datetime > $2

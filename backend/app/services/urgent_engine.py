@@ -5,6 +5,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.database import get_pool
 from app.utils.datetime_utils import now_naive_utc, to_naive_utc
+from app.services.availability_service import get_availability_scheduling_conflict
 from app.services.selection_engine import (
     generate_staff_recommendations,
     haversine_km,
@@ -288,7 +289,33 @@ async def accept_offer(event_id: str, offer_id: str) -> dict[str, Any]:
         requirements = await load_event_requirements(event_id)
         role = await resolve_offer_role(str(offer["server_id"]), requirements)
 
+        event_row = await conn.fetchrow(
+            "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
+            event_id,
+        )
+        if not event_row:
+            return {"error": "Event not found", "status": "ERROR"}
+        event_start = to_naive_utc(event_row["start_datetime"])
+        event_end = to_naive_utc(event_row["end_datetime"])
+        if event_start is None or event_end is None:
+            return {"error": "Event dates are invalid", "status": "ERROR"}
+
         async with conn.transaction():
+            overlap = await get_availability_scheduling_conflict(
+                conn,
+                str(offer["server_id"]),
+                event_start,
+                event_end,
+            )
+            if overlap["conflict"]:
+                return {
+                    "error": (
+                        "Scheduling conflict: the server is already confirmed on an "
+                        f"overlapping event. {overlap['conflict_reason']}"
+                    ),
+                    "status": "ERROR",
+                }
+
             await conn.execute(
                 "UPDATE urgent_event_offers SET status = 'ACCEPTED', responded_at = NOW() WHERE id = $1",
                 offer_id,

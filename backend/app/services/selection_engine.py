@@ -120,6 +120,7 @@ async def load_servers_with_details(event_id: str) -> list[dict[str, Any]]:
                 FROM event_staff es
                 JOIN events e ON e.id = es.event_id
                 WHERE es.server_id = s.id
+                  AND es.assignment_status = 'CONFIRMED'
                   AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
                   AND e.start_datetime < $2
                   AND e.end_datetime > $1
@@ -292,6 +293,18 @@ async def generate_staff_recommendations(event_id: str) -> dict[str, Any]:
 
             if not server.get("is_active"):
                 excluded.append({**server, "exclusion_reason": "Server inactive"})
+                continue
+
+            if server.get("conflict"):
+                conflict_reason = server.get("conflict_reason")
+                excluded.append({
+                    **server,
+                    "exclusion_reason": (
+                        f"Scheduling conflict: {conflict_reason}"
+                        if conflict_reason
+                        else "Scheduling conflict"
+                    ),
+                })
                 continue
 
             if server.get("availability_status") != "AVAILABLE":

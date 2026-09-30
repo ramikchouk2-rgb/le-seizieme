@@ -8,7 +8,10 @@ from app.core.config import settings
 from app.core.database import get_pool
 from app.utils.datetime_utils import now_naive_utc, to_naive_utc
 from app.utils.selection_utils import compute_candidate_score
-from app.services.availability_service import get_event_scheduling_conflict
+from app.services.availability_service import (
+    get_availability_scheduling_conflict,
+    get_event_scheduling_conflict,
+)
 from app.services.selection_engine import haversine_km, normalize_text, serialize_row
 
 
@@ -487,6 +490,21 @@ async def confirm_staff_assignments(
                     raise HTTPException(
                         status_code=409,
                         detail=f"Serveur déjà affecté à cet événement: {server_id}",
+                    )
+
+                overlap = await get_availability_scheduling_conflict(
+                    conn,
+                    server_id,
+                    event_start,
+                    event_end,
+                )
+                if overlap["conflict"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Conflit de planning: le serveur est déjà confirmé sur un événement "
+                            f"qui chevauche. {overlap['conflict_reason']}"
+                        ),
                     )
 
                 selected_count = await conn.fetchval(
@@ -1576,6 +1594,21 @@ async def add_staff_assignment(event_id: str, payload: dict[str, Any]) -> dict[s
                 raise HTTPException(
                     status_code=409,
                     detail="Ce serveur est déjà affecté à cet événement.",
+                )
+
+            overlap = await get_availability_scheduling_conflict(
+                conn,
+                server_id,
+                event_start,
+                event_end,
+            )
+            if overlap["conflict"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Conflit de planning: le serveur est déjà confirmé sur un événement "
+                        f"qui chevauche. {overlap['conflict_reason']}"
+                    ),
                 )
 
             selected_count = await conn.fetchval(
