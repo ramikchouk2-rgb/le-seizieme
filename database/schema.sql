@@ -31,6 +31,7 @@ CREATE TYPE ranking_status AS ENUM ('CALCULATED', 'PAID', 'ARCHIVED');
 CREATE TYPE transaction_type AS ENUM ('EARNED', 'BONUS', 'PENALTY', 'ADJUSTMENT');
 CREATE TYPE user_role AS ENUM ('ADMIN', 'MANAGER', 'STAFF');
 CREATE TYPE attendance_status AS ENUM ('EXPECTED', 'PRESENT', 'LATE', 'ABSENT', 'EXCUSED', 'LEFT');
+CREATE TYPE server_file_type AS ENUM ('PROFILE_PHOTO');
 
 
 -- ===================================================
@@ -113,8 +114,42 @@ CREATE TABLE server_locations (
 );
 
 CREATE INDEX idx_server_locations_server_id ON server_locations(server_id);
-CREATE INDEX idx_server_locations_is_current ON server_locations(is_current) WHERE is_current = TRUE;
 CREATE UNIQUE INDEX idx_server_locations_unique_current ON server_locations(server_id) WHERE is_current = TRUE;
+
+
+-- ===================================================
+-- SERVER_FILES
+-- Authoritative store for server binary attachments (Step 24C-D-5).
+-- BYTEA storage only: no external object storage, no public URLs, no signed
+-- links, and deliberately NO GPS/location columns.
+-- `servers.profile_photo` is dead legacy TEXT and is left untouched.
+-- ===================================================
+
+CREATE TABLE server_files (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    file_type server_file_type NOT NULL DEFAULT 'PROFILE_PHOTO',
+    content BYTEA NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    original_filename VARCHAR(255),
+    file_size INTEGER NOT NULL,
+    is_current BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT server_files_content_nonempty_check CHECK (octet_length(content) > 0),
+    CONSTRAINT server_files_size_matches_content_check CHECK (file_size = octet_length(content)),
+    CONSTRAINT server_files_mime_allowed_check CHECK (
+        mime_type IN ('image/jpeg', 'image/png', 'image/webp')
+    ),
+    CONSTRAINT server_files_filename_no_path_check CHECK (
+        original_filename IS NULL
+        OR (original_filename NOT LIKE '%/%' AND original_filename NOT LIKE '%\\%')
+    )
+);
+
+CREATE INDEX idx_server_files_server_id ON server_files(server_id);
+CREATE INDEX idx_server_files_current ON server_files(server_id, file_type) WHERE is_current = TRUE;
+CREATE UNIQUE INDEX idx_server_files_unique_current ON server_files(server_id, file_type) WHERE is_current = TRUE;
 
 
 -- ===================================================

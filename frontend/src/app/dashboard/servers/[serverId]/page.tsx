@@ -7,6 +7,9 @@ import { useServer } from '@/app/lib/hooks';
 import { parseBackendDateTime } from '@/app/lib/datetime';
 import { useAnnouncer } from '@/app/components/ui/Announcer';
 import { Spinner } from '@/app/lib/loading';
+import ServerPhoto from '@/app/components/servers/ServerPhoto';
+import ProfilePhotoControls from '@/app/components/servers/ProfilePhotoControls';
+import { getCurrentUser } from '@/app/lib/api-client';
 import Link from 'next/link';
 
 const SECTION = 'text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2';
@@ -20,6 +23,17 @@ export default function ServerProfilePage() {
   const [deactivating, setDeactivating] = useState(false);
 
   const { data, isLoading, error, refetch } = useServer(serverId);
+  // Step 24C-D-5: photo management mirrors the API, which allows MANAGER and
+  // ADMIN only. The control is hidden for other roles rather than relying on a
+  // failing request.
+  const [photoRefreshToken, setPhotoRefreshToken] = useState(0);
+  const currentUser = getCurrentUser();
+  const canManagePhoto = currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER';
+
+  const handlePhotoChanged = () => {
+    setPhotoRefreshToken((n) => n + 1);
+    refetch();
+  };
 
   const handleDeactivate = async () => {
     setDeactivating(true);
@@ -111,6 +125,47 @@ export default function ServerProfilePage() {
           </div>
         }
       />
+
+      {/* Profile photo (Step 24C-D-5) */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <svg className="w-5 h-5 text-[#D4AF37]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          Photo de profil
+        </h3>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+          <ServerPhoto
+            serverId={serverId}
+            firstName={profile.first_name}
+            lastName={profile.last_name}
+            hasProfilePhoto={profile.has_profile_photo}
+            size="xl"
+            refreshToken={photoRefreshToken}
+          />
+          <div className="flex-1">
+            {canManagePhoto ? (
+              <ProfilePhotoControls
+                serverId={serverId}
+                hasProfilePhoto={Boolean(profile.has_profile_photo)}
+                onChanged={handlePhotoChanged}
+              />
+            ) : (
+              <p className="text-sm text-gray-500">
+                {profile.has_profile_photo
+                  ? 'Photo de profil disponible.'
+                  : 'Aucune photo de profil.'}
+              </p>
+            )}
+            {profile.profile_photo && (
+              <p className="mt-2 text-xs text-gray-500">
+                {profile.profile_photo.original_filename || 'Photo'} ·{' '}
+                {(profile.profile_photo.file_size / 1024).toFixed(0)} Ko
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Identity Section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">

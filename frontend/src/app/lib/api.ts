@@ -2,6 +2,7 @@ import type {
   ActivityItem,
   EventDetailData,
   ServerCreateRequest,
+  ServerFileMetadata,
   ServerFilters,
   ServerListItem,
   ServerListResponse,
@@ -23,6 +24,7 @@ import type {
 export type {
   ActivityItem,
   ServerCreateRequest,
+  ServerFileMetadata,
   ServerFilters,
   ServerListItem,
   ServerListResponse,
@@ -846,7 +848,7 @@ export interface GamificationAwardResponse {
   }[];
 }
 
-import { fetchAPI, ApiError } from '@/app/lib/api-client';
+import { fetchAPI, ApiError, fetchBinary } from '@/app/lib/api-client';
 
 export async function getEventDetail(eventId: string): Promise<EventDetailData | null> {
   try {
@@ -939,6 +941,86 @@ export async function getServer(serverId: string): Promise<ServerProfile | null>
     }
     throw error;
   }
+}
+
+// ============================================================
+// Server profile photo (Step 24C-D-5)
+//
+// The photo endpoint requires a MANAGER/ADMIN token; the bytes are fetched
+// explicitly and are never embedded in a list or detail payload. The UI must
+// not assume a public URL exists -- there is none.
+// ============================================================
+
+/**
+ * Client-side pre-check limit. Mirrors the backend `MAX_PROFILE_PHOTO_BYTES`
+ * setting; the backend remains the sole authority and re-validates every upload
+ * by magic bytes, so a stale value here cannot bypass the server check.
+ */
+export const MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024;
+
+export const ACCEPTED_PROFILE_PHOTO_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+] as const;
+
+export interface ProfilePhotoValidation {
+  valid: boolean;
+  error?: string;
+}
+
+/**
+ * Client-side pre-check. The backend re-validates by magic bytes, so this is
+ * only to give the user immediate feedback, never to decide acceptance.
+ */
+export function validateProfilePhotoFile(file: File): ProfilePhotoValidation {
+  if (file.size === 0) {
+    return { valid: false, error: 'Le fichier est vide.' };
+  }
+  if (file.size > MAX_PROFILE_PHOTO_BYTES) {
+    const mb = (MAX_PROFILE_PHOTO_BYTES / (1024 * 1024)).toFixed(0);
+    return {
+      valid: false,
+      error: `Fichier trop volumineux (maximum ${mb} Mo).`,
+    };
+  }
+  if (!ACCEPTED_PROFILE_PHOTO_TYPES.includes(file.type as (typeof ACCEPTED_PROFILE_PHOTO_TYPES)[number])) {
+    return {
+      valid: false,
+      error: 'Format non accepté. Formats acceptés : JPEG, PNG, WebP.',
+    };
+  }
+  return { valid: true };
+}
+
+export async function getServerProfilePhoto(serverId: string): Promise<Blob | null> {
+  try {
+    return await fetchBinary(`/servers/${serverId}/files/profile-photo`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function uploadServerProfilePhoto(
+  serverId: string,
+  file: File,
+): Promise<ServerFileMetadata> {
+  const form = new FormData();
+  form.append('file', file);
+  return fetchAPI<ServerFileMetadata>(
+    `/servers/${serverId}/files/profile-photo`,
+    { method: 'PUT', body: form },
+  );
+}
+
+export async function deleteServerProfilePhoto(serverId: string): Promise<void> {
+  await fetchAPI<{ message?: string }>(
+    `/servers/${serverId}/files/profile-photo`,
+    { method: 'DELETE' },
+  );
 }
 
 export async function createServer(

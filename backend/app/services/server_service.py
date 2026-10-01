@@ -6,6 +6,10 @@ from app.services.availability_service import (
     get_availability_scheduling_conflict,
     get_event_scheduling_conflict,
 )
+from app.services.server_file_service import (
+    get_current_profile_photo_metadata,
+    load_servers_with_profile_photo,
+)
 from app.utils.datetime_utils import now_naive_utc
 from fastapi import HTTPException
 
@@ -208,9 +212,16 @@ async def load_server_list(
         rows = await conn.fetch(data_query, *params)
 
         result = []
+        # Step 24C-D-5: one batched lookup for the whole page instead of a
+        # per-server photo query (no N+1). Only a boolean is projected, so the
+        # BYTEA column is never read on a list request.
+        photo_flags = await load_servers_with_profile_photo(
+            [str(r["id"]) for r in rows]
+        )
         for r in rows:
+            server_id = str(r["id"])
             item: dict[str, Any] = {
-                "id": str(r["id"]),
+                "id": server_id,
                 "first_name": r["first_name"],
                 "last_name": r["last_name"],
                 "gender": r["gender"],
@@ -223,6 +234,7 @@ async def load_server_list(
                 "location_verified": bool(r["location_verified"]),
                 "monthly_points": r["monthly_points"],
                 "rank": r["rank"] or 0,
+                "has_profile_photo": photo_flags.get(server_id, False),
             }
             if r["vehicle_id"]:
                 item["vehicle"] = {
@@ -370,6 +382,13 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
         previous_month_points = previous_month_points_row["total_points"] if previous_month_points_row else 0
         total_points = current_month_points + previous_month_points
 
+        # Step 24C-D-5: metadata projection only. Photo BYTES are never part of
+        # a detail response; they are served exclusively by the authorized
+        # photo endpoint.
+        photo_metadata = await get_current_profile_photo_metadata(
+            str(server_row["id"])
+        )
+
         return {
             "id": str(server_row["id"]),
             "first_name": server_row["first_name"],
@@ -381,6 +400,9 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             "availability_status": server_row["availability_status"],
             "email": server_row["email"],
             "phone": server_row["phone"],
+            # Step 24C-D-5
+            "has_profile_photo": photo_metadata is not None,
+            "profile_photo": photo_metadata,
             "location": {
                 "city": server_row["city"],
                 "area": server_row["location_area"] or "",

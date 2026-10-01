@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     DEFAULT_EVENT_LATITUDE: float = 36.8065
     DEFAULT_EVENT_LONGITUDE: float = 10.1815
 
+    # Step 24C-D-5: maximum accepted profile photo size, in bytes (2 MiB).
+    # BYTEA rows live in PostgreSQL, so this is deliberately small; raising it
+    # means revisiting table bloat and backup size.
+    MAX_PROFILE_PHOTO_BYTES: int = 2 * 1024 * 1024
+
     PORT: int = 8000
 
     def validate_production(self) -> None:

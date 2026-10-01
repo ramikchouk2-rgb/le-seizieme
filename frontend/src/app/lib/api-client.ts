@@ -159,6 +159,27 @@ async function fetchAPI<T>(endpoint: string, options: RequestOptions = {}): Prom
   throw lastError || new Error('Requête API échouée');
 }
 
+export async function fetchBinary(endpoint: string): Promise<Blob> {
+  // Step 24C-D-5: binary responses (profile photos) are served only by an
+  // authenticated endpoint, so the token must be attached here exactly as it is
+  // for JSON requests. Never cache or persist the resulting blob.
+  const url = `${API_BASE_URL}${endpoint}`;
+  const token = getAuthToken();
+  const response = await fetchWithTimeout(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    throw ApiError.fromResponse(response, body);
+  }
+  return response.blob();
+}
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const res = await fetchWithTimeout(`${API_BASE_URL}/auth/login`, {
     method: 'POST',

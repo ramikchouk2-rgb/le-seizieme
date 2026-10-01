@@ -3,6 +3,7 @@
 import { useFocusTrap } from '@/app/components/ui/FocusTrap';
 import { ServerListItem, ServerProfile } from '@/app/lib/api';
 import { parseBackendDateTime } from '@/app/lib/datetime';
+import ServerPhoto from '@/app/components/servers/ServerPhoto';
 import Link from 'next/link';
 
 interface ServerDrawerProps {
@@ -89,9 +90,14 @@ export default function ServerDrawer({ server, profile, loading, onClose }: Serv
           </div>
 
           <div className="flex items-center gap-4 mb-6">
-            <div className="w-16 h-16 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-[#D4AF37] text-xl font-bold">
-              {server.first_name[0]}{server.last_name[0]}
-            </div>
+            {/* Step 24C-D-5: real photo when one exists, initials otherwise. */}
+            <ServerPhoto
+              serverId={server.id}
+              firstName={server.first_name}
+              lastName={server.last_name}
+              hasProfilePhoto={server.has_profile_photo}
+              size="lg"
+            />
             <div>
               <h3 className="text-lg font-semibold text-gray-900">
                 {server.first_name} {server.last_name}

@@ -32,6 +32,8 @@ export interface ServerListItem {
   location_verified: boolean;
   monthly_points: number;
   rank: number;
+  /** Step 24C-D-5: boolean projection only, never image bytes. */
+  has_profile_photo?: boolean;
 }
 
 export interface ServerListResponse {
@@ -107,6 +109,24 @@ export interface ServerProfile {
   discipline_score: number;
   endurance_score: number;
   is_active: boolean;
+  /**
+   * Step 24C-D-5: photo metadata only. Photo bytes are never embedded in a
+   * profile response; they are fetched from the authorized photo endpoint.
+   */
+  has_profile_photo: boolean;
+  profile_photo?: ServerFileMetadata | null;
+}
+
+/** Step 24C-D-5: descriptive metadata for a stored server file. */
+export interface ServerFileMetadata {
+  id: string;
+  server_id: string;
+  file_type: string;
+  mime_type: string;
+  original_filename?: string | null;
+  file_size: number;
+  is_current: boolean;
+  created_at: string;
 }
 
 export interface ServerStats {

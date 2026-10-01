@@ -64,6 +64,14 @@ class ServerListItem(BaseModel):
     location_verified: bool
     monthly_points: int
     rank: int
+    # Step 24C-D-5: boolean projection only. The list query must never select
+    # the BYTEA content column.
+    #
+    # NOTE: this file defines ServerListItem twice. ServerListResponse binds to
+    # THIS class, while `from app.models.servers import ServerListItem` resolves
+    # to the LATER definition. Both must carry the same fields or the list
+    # endpoint fails response validation. Do not add a field to only one.
+    has_profile_photo: bool = False
 
 
 class ServerListResponse(BaseModel):
@@ -161,35 +169,22 @@ class ServerPointsResponse(BaseModel):
     rank: Optional[int] = None
 
 
-class ServerListItem(BaseModel):
+class ServerFileMetadataResponse(BaseModel):
+    """Metadata for a stored server file.
+
+    Step 24C-D-5: deliberately contains NO binary content and NO public URL.
+    Bytes are retrievable only through the explicitly authorized photo
+    endpoint, never from a normal list/detail response.
+    """
+
     id: str
-    first_name: str
-    last_name: str
-    gender: str
-    city: str
-    years_experience: int
-    worker_type: str
-    availability_status: str
-    main_skill: str
-    main_skill_level: int
-    vehicle: Optional[dict] = None
-    location_verified: bool
-    monthly_points: int
-    rank: int
-
-
-class ServerListResponse(BaseModel):
-    items: list[ServerListItem]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int
-
-
-class ServerLocationResponse(BaseModel):
-    city: str
-    area: str
-    is_verified: bool
+    server_id: str
+    file_type: str
+    mime_type: str
+    original_filename: Optional[str] = None
+    file_size: int
+    is_current: bool
+    created_at: str
 
 
 class ServerProfileResponse(BaseModel):
@@ -209,6 +204,9 @@ class ServerProfileResponse(BaseModel):
     availability: list[ServerAvailabilityResponse]
     upcoming_events: list[ServerUpcomingEventResponse]
     points: dict
+    # Step 24C-D-5: photo metadata, never photo bytes.
+    has_profile_photo: bool = False
+    profile_photo: Optional[ServerFileMetadataResponse] = None
 
 
 class ServerStatsResponse(BaseModel):

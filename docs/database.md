@@ -57,11 +57,56 @@ Serveurs événementiels.
 | city_id | UUID | Ville de rattachement (FK cities) |
 | years_experience | INTEGER | Années d'expérience |
 | is_active | BOOLEAN | Compte actif |
-| profile_photo | TEXT | Photo de profil |
+| profile_photo | TEXT | **Hérité, inutilisé.** Conservé pour compatibilité ; voir `server_files` |
 | created_at | TIMESTAMP | Date de création |
 | updated_at | TIMESTAMP | Date de modification |
 
 **IMPORTANT** : L'adresse exacte du domicile n'est pas stockée dans cette table.
+
+### server_files
+Fichiers binaires rattachés à un serveur (photos de profil). **Étape 24C-D-5.**
+
+| Colonne | Type | Description |
+|---------|------|-------------|
+| id | UUID | Clé primaire |
+| server_id | UUID | Serveur (FK servers, ON DELETE CASCADE) |
+| file_type | server_file_type | Type de fichier (`PROFILE_PHOTO`) |
+| content | BYTEA | Contenu binaire |
+| mime_type | VARCHAR(100) | Type MIME vérifié |
+| original_filename | VARCHAR(255) | Nom d'origine, nettoyé (facultatif) |
+| file_size | INTEGER | Taille en octets |
+| is_current | BOOLEAN | Fichier actuellement actif |
+| created_at | TIMESTAMP | Date de création |
+| updated_at | TIMESTAMP | Date de modification |
+
+**Stockage BYTEA.** Les octets résident dans PostgreSQL. Aucun stockage objet
+externe, aucune URL publique, aucun lien signé : il n'existe aucun moyen
+d'adresser un fichier sans passer par un endpoint authentifié.
+
+**Pas de métadonnées GPS.** La table ne contient aucune colonne de localisation.
+Une photo n'est jamais associée à une position.
+
+**Remplacement non destructif.** Uploader une nouvelle photo ne supprime pas
+l'ancienne : l'ancienne passe à `is_current = FALSE` et reste en base. Un index
+unique partiel `(server_id, file_type) WHERE is_current` garantit qu'un seul
+fichier est courant par type et par serveur, y compris en cas d'uploads
+concurrents.
+
+**Contraintes.** Contenu non vide ; `file_size` doit être égal à
+`octet_length(content)` ; `mime_type` limité à JPEG / PNG / WebP ; le nom de
+fichier ne peut contenir de séparateur de chemin.
+
+**Validation par contenu, jamais par extension.** Le service compare les octets
+d'en-tête (*magic bytes*) au type MIME déclaré. Le nom de fichier et le
+`Content-Type` du client peuvent refuser un fichier, jamais l'authentifier.
+Taille maximale : `MAX_PROFILE_PHOTO_BYTES` (2 Mio par défaut).
+
+**Légalité de `servers.profile_photo`.** Cette colonne TEXT est héritée : aucun
+code ne la lit ni ne l'écrit. Elle n'est pas supprimée à cette étape et
+`server_files` fait désormais autorité. Aucune photo n'est rétroportée depuis
+`servers.profile_photo`.
+
+Migration : `database/migrations/20261001_server_files.sql` (idempotente).
 
 ### server_locations
 Historique des localisations des serveurs.

@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 
 from app.core.deps import get_current_user_dep, require_manager_or_admin
 from app.models.servers import (
@@ -9,6 +9,7 @@ from app.models.servers import (
     ServerAvailabilityResponse,
     ServerAvailabilityUpdateRequest,
     ServerCreateRequest,
+    ServerFileMetadataResponse,
     ServerListItem,
     ServerListResponse,
     ServerProfileResponse,
@@ -21,6 +22,12 @@ from app.models.servers import (
     ServerVehicleResponse,
     ServerVehicleUpdateRequest,
     ServerResponse,
+)
+from app.services.server_file_service import (
+    delete_current_profile_photo,
+    get_current_profile_photo_content,
+    server_exists,
+    upload_profile_photo,
 )
 from app.services.server_service import (
     add_server_skill,
@@ -123,3 +130,88 @@ async def update_skill_endpoint(server_id: str, skill_id: str, payload: ServerSk
 async def remove_skill_endpoint(server_id: str, skill_id: str) -> dict[str, str]:
     await remove_server_skill(server_id, skill_id)
     return {"message": "Compétence supprimée avec succès."}
+
+
+# =========================================================
+# Server files / profile photo (Step 24C-D-5)
+#
+# There is deliberately NO public or unauthenticated image endpoint. Every route
+# below reuses `require_manager_or_admin`, the same dependency the rest of the
+# server-management surface uses, so photo management follows existing
+# permissions. No staff self-service identity model is invented here.
+# =========================================================
+
+
+@router.put(
+    "/servers/{server_id}/files/profile-photo",
+    response_model=ServerFileMetadataResponse,
+    status_code=201,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def upload_profile_photo_endpoint(
+    server_id: str,
+    file: UploadFile = File(...),
+) -> ServerFileMetadataResponse:
+    """Upload or replace a server's profile photo.
+
+    Content is validated by magic bytes in the service layer; this handler only
+    moves bytes and hands off. The response is metadata only.
+    """
+    data = await file.read()
+    metadata = await upload_profile_photo(
+        server_id=server_id,
+        data=data,
+        declared_mime_type=file.content_type,
+        original_filename=file.filename,
+    )
+    return ServerFileMetadataResponse(**metadata)
+
+
+@router.get(
+    "/servers/{server_id}/files/profile-photo",
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def get_profile_photo_endpoint(server_id: str) -> Response:
+    """Return the raw photo bytes to an authorized manager/admin.
+
+    This is the ONLY endpoint that returns BYTEA. The response is explicitly
+    marked private and uncacheable so a photo cannot be retained by an
+    intermediary cache. No public URL is generated or returned.
+    """
+    if not await server_exists(server_id):
+        raise HTTPException(status_code=404, detail="Serveur introuvable.")
+
+    row = await get_current_profile_photo_content(server_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail="Aucune photo de profil pour ce serveur."
+        )
+
+    return Response(
+        content=bytes(row["content"]),
+        media_type=row["mime_type"],
+        headers={
+            # Private per-server data: never store in a shared cache, and never
+            # let the browser treat it as a durable public asset.
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+        },
+    )
+
+
+@router.delete(
+    "/servers/{server_id}/files/profile-photo",
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def delete_profile_photo_endpoint(server_id: str) -> dict[str, Any]:
+    """Deactivate the current profile photo (row retained as history)."""
+    if not await server_exists(server_id):
+        raise HTTPException(status_code=404, detail="Serveur introuvable.")
+
+    removed = await delete_current_profile_photo(server_id)
+    if not removed:
+        raise HTTPException(
+            status_code=404, detail="Aucune photo de profil pour ce serveur."
+        )
+    return {"message": "Photo de profil supprimée avec succès."}

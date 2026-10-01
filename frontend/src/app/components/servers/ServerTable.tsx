@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { ServerListItem } from '@/app/components/dashboard/types';
+import ServerPhoto from '@/app/components/servers/ServerPhoto';
 
 interface ServerTableProps {
   servers: ServerListItem[];
@@ -88,9 +89,13 @@ export default function ServerTable({ servers, sortBy, sortOrder, onSort }: Serv
                       href={`/dashboard/servers/${server.id}`}
                       className="flex items-center gap-2"
                     >
-                      <div className="w-8 h-8 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-[#D4AF37] text-xs font-bold">
-                        {server.first_name[0]}{server.last_name[0]}
-                      </div>
+                      <ServerPhoto
+                        serverId={server.id}
+                        firstName={server.first_name}
+                        lastName={server.last_name}
+                        hasProfilePhoto={server.has_profile_photo}
+                        size="sm"
+                      />
                       <div>
                         <p className="text-sm font-medium text-gray-900">
                           {server.first_name} {server.last_name}
@@ -182,9 +187,13 @@ export default function ServerTable({ servers, sortBy, sortOrder, onSort }: Serv
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-[#D4AF37]/10 flex items-center justify-center text-[#D4AF37] text-sm font-bold">
-                  {server.first_name[0]}{server.last_name[0]}
-                </div>
+                <ServerPhoto
+                  serverId={server.id}
+                  firstName={server.first_name}
+                  lastName={server.last_name}
+                  hasProfilePhoto={server.has_profile_photo}
+                  size="md"
+                />
                 <div>
                   <p className="text-sm font-semibold text-gray-900">
                     {server.first_name} {server.last_name}
