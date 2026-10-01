@@ -76,6 +76,15 @@ def _webp_bytes() -> bytes:
     return b"RIFF" + (20).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00" * 16
 
 
+def _pdf_bytes() -> bytes:
+    """Minimal byte-accurate PDF used by the ATTESTATION file-kind tests."""
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"trailer\n<< /Root 1 0 R >>\n%%EOF\n"
+    )
+
+
 def _fake_riff() -> bytes:
     """RIFF container that is NOT webp -- must not be accepted as an image."""
     return b"RIFF" + (20).to_bytes(4, "little") + b"WAVEfmt " + b"\x00" * 16
@@ -172,16 +181,52 @@ class TestSchemaAndModels:
         ):
             assert forbidden not in names, f"server_files must not expose {forbidden}"
 
-    async def test_current_uniqueness_per_server_and_type(self):
+    async def test_current_uniqueness_applies_to_profile_photos_only(self):
+        """Step 24C-D-6 narrowed this: attestation documents are append-only, so
+        a server may hold several current documents. Only photos are unique."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             idx = await conn.fetchval(
                 "SELECT indexdef FROM pg_indexes "
-                "WHERE indexname = 'idx_server_files_unique_current'"
+                "WHERE indexname = 'idx_server_files_unique_current_photo'"
             )
-        assert idx is not None
+        assert idx is not None, "the photo-scoped unique index must exist"
         assert "UNIQUE" in idx.upper()
         assert "is_current" in idx
+        assert "PROFILE_PHOTO" in idx
+
+    async def test_several_current_attestation_files_are_allowed(self):
+        """Guards the append-only invariant for attestation documents."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            city_id = await conn.fetchval("SELECT id FROM cities LIMIT 1")
+            server_id = uuid.uuid4()
+            await conn.execute(
+                """
+                INSERT INTO servers (
+                    id, first_name, last_name, phone, email, gender, city_id, years_experience
+                )
+                VALUES ($1, 'A', 'B', '+21600000000', $2, 'MALE', $3, 1)
+                """,
+                server_id,
+                f"multiatt_{server_id}@example.org",
+                city_id,
+            )
+        try:
+            for i in range(3):
+                pool = await get_pool()
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO server_files (server_id, file_type, content, mime_type, file_size)
+                        VALUES ($1, 'ATTESTATION', $2, 'application/pdf', $3)
+                        """,
+                        server_id,
+                        _pdf_bytes(),
+                        len(_pdf_bytes()),
+                    )
+        finally:
+            await _cleanup([str(server_id)])
 
     async def test_no_fabricated_rows_from_legacy_profile_photo(self):
         """The migration must not synthesize photos from servers.profile_photo."""

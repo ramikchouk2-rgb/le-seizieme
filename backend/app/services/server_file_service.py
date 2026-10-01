@@ -32,13 +32,41 @@ ALLOWED_PROFILE_PHOTO_MIME_TYPES: frozenset[str] = frozenset(
     {"image/jpeg", "image/png", "image/webp"}
 )
 
+# Step 24C-D-6: professional attestation documents. Conservative on purpose --
+# PDF plus the three image formats already proven for photos. No Office formats,
+# no archives, no "anything goes".
+ALLOWED_ATTESTATION_MIME_TYPES: frozenset[str] = frozenset(
+    {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+)
+
 # Leading magic-byte signatures per supported type.
 _MAGIC_SIGNATURES: tuple[tuple[str, bytes], ...] = (
     ("image/jpeg", b"\xff\xd8\xff"),
     ("image/png", b"\x89PNG\r\n\x1a\n"),
     # WEBP is a RIFF container: "RIFF" ....size.... "WEBP"
     ("image/webp", b"RIFF"),
+    # PDF: "%PDF-" then a version marker.
+    ("application/pdf", b"%PDF-"),
 )
+
+# File kinds this service can store. The enum itself is extended by migration;
+# this mapping keeps the Python side in step and makes each kind's accepted
+# types and size limit explicit in one place.
+FILE_KINDS: dict[str, dict[str, object]] = {
+    "PROFILE_PHOTO": {
+        "allowed_mime_types": ALLOWED_PROFILE_PHOTO_MIME_TYPES,
+        "max_bytes_setting": "MAX_PROFILE_PHOTO_BYTES",
+        "single_current_per_server": True,
+    },
+    "ATTESTATION": {
+        "allowed_mime_types": ALLOWED_ATTESTATION_MIME_TYPES,
+        "max_bytes_setting": "MAX_ATTESTATION_BYTES",
+        # Attestation history is append-only, so several current files per
+        # server are expected; uniqueness is enforced by the attestation row,
+        # not by server_files.
+        "single_current_per_server": False,
+    },
+}
 
 _MAX_FILENAME_LENGTH = 255
 _FILENAME_STRIP_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -46,11 +74,25 @@ _FILENAME_STRIP_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _FILENAME_UNSAFE_RE = re.compile(r"[\\/\x00]")
 
 PROFILE_PHOTO_FILE_TYPE = "PROFILE_PHOTO"
+ATTESTATION_FILE_TYPE = "ATTESTATION"
+
+
+def max_bytes_for(file_type: str) -> int:
+    """Size ceiling for a file kind, read from settings."""
+    kind = FILE_KINDS.get(file_type)
+    if kind is None:
+        raise ValueError(f"Unsupported server file type: {file_type}")
+    return int(getattr(settings, str(kind["max_bytes_setting"])))
 
 
 def max_profile_photo_bytes() -> int:
     """Maximum accepted profile photo size in bytes."""
-    return settings.MAX_PROFILE_PHOTO_BYTES
+    return max_bytes_for(PROFILE_PHOTO_FILE_TYPE)
+
+
+def max_attestation_bytes() -> int:
+    """Maximum accepted attestation document size in bytes."""
+    return max_bytes_for(ATTESTATION_FILE_TYPE)
 
 
 def sanitize_filename(filename: str | None) -> str | None:
@@ -70,8 +112,12 @@ def sanitize_filename(filename: str | None) -> str | None:
     return cleaned[:_MAX_FILENAME_LENGTH]
 
 
-def sniff_image_mime_type(data: bytes) -> str | None:
-    """Return the MIME type implied by the leading bytes, or None."""
+def sniff_mime_type(data: bytes) -> str | None:
+    """Return the MIME type implied by the leading bytes, or None.
+
+    Step 24C-D-6: this is the single content-sniffing entry point, shared by
+    photos and attestation documents so the two can never drift apart.
+    """
     for mime_type, signature in _MAGIC_SIGNATURES:
         if not data.startswith(signature):
             continue
@@ -80,17 +126,43 @@ def sniff_image_mime_type(data: bytes) -> str | None:
             if len(data) >= 12 and data[8:12] == b"WEBP":
                 return mime_type
             continue
+        if mime_type == "application/pdf":
+            # "%PDF-" must be followed by a version digit ("%PDF-1.4", "%PDF-2.0").
+            # A file that merely starts with those bytes is not accepted.
+            if len(data) >= 8 and data[5:6].isdigit():
+                return mime_type
+            continue
         return mime_type
     return None
 
 
-def validate_profile_photo(data: bytes, declared_mime_type: str | None) -> str:
-    """Validate photo bytes and return the MIME type to persist.
+def sniff_image_mime_type(data: bytes) -> str | None:
+    """Return the MIME type implied by the leading bytes, or None."""
+    sniffed = sniff_mime_type(data)
+    if sniffed in ALLOWED_PROFILE_PHOTO_MIME_TYPES:
+        return sniffed
+    return None
+
+
+def validate_file_content(
+    data: bytes,
+    declared_mime_type: str | None,
+    file_type: str,
+) -> str:
+    """Validate bytes for a file kind and return the MIME type to persist.
 
     Raises HTTPException 400 on any validation failure. The declared MIME type
     is used only as a cross-check: it can reject a file but can never vouch for
     one.
     """
+    kind = FILE_KINDS.get(file_type)
+    if kind is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Type de fichier serveur non pris en charge.",
+        )
+    allowed: frozenset[str] = kind["allowed_mime_types"]  # type: ignore[assignment]
+
     if not data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -98,7 +170,7 @@ def validate_profile_photo(data: bytes, declared_mime_type: str | None) -> str:
         )
 
     size = len(data)
-    limit = max_profile_photo_bytes()
+    limit = max_bytes_for(file_type)
     if size > limit:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -108,24 +180,23 @@ def validate_profile_photo(data: bytes, declared_mime_type: str | None) -> str:
             ),
         )
 
-    sniffed = sniff_image_mime_type(data)
-    if sniffed is None:
+    sniffed = sniff_mime_type(data)
+    if sniffed is None or sniffed not in allowed:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Format d'image non reconnu. Formats acceptés : JPEG, PNG, WebP."
+                "Format de document non reconnu ou non autorisé. "
+                f"Formats acceptés : {', '.join(sorted(allowed))}."
             ),
-        )
-
-    if sniffed not in ALLOWED_PROFILE_PHOTO_MIME_TYPES:  # pragma: no cover - defensive
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Format d'image non autorisé.",
         )
 
     if declared_mime_type:
         normalized = declared_mime_type.split(";")[0].strip().lower()
-        if normalized and normalized != "application/octet-stream" and normalized != sniffed:
+        if (
+            normalized
+            and normalized != "application/octet-stream"
+            and normalized != sniffed
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
@@ -134,6 +205,18 @@ def validate_profile_photo(data: bytes, declared_mime_type: str | None) -> str:
             )
 
     return sniffed
+
+
+def validate_profile_photo(data: bytes, declared_mime_type: str | None) -> str:
+    """Validate profile photo bytes and return the MIME type to persist."""
+    return validate_file_content(data, declared_mime_type, PROFILE_PHOTO_FILE_TYPE)
+
+
+def validate_attestation_document(
+    data: bytes, declared_mime_type: str | None
+) -> str:
+    """Validate an attestation document and return the MIME type to persist."""
+    return validate_file_content(data, declared_mime_type, ATTESTATION_FILE_TYPE)
 
 
 def _metadata_from_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -161,8 +244,10 @@ async def server_exists(server_id: str) -> bool:
         )
 
 
-async def get_current_profile_photo_metadata(server_id: str) -> dict[str, Any] | None:
-    """Metadata only. This is what detail responses use; no BYTEA is selected."""
+async def get_current_file_metadata(
+    server_id: str, file_type: str
+) -> dict[str, Any] | None:
+    """Metadata for a server's current file of a kind. Never selects BYTEA."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -171,12 +256,162 @@ async def get_current_profile_photo_metadata(server_id: str) -> dict[str, Any] |
                    file_size, is_current, created_at
             FROM server_files
             WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+            ORDER BY created_at DESC
             LIMIT 1
             """,
             server_id,
-            PROFILE_PHOTO_FILE_TYPE,
+            file_type,
         )
         return _metadata_from_row(dict(row)) if row else None
+
+
+async def get_current_file_content(
+    server_id: str, file_type: str
+) -> dict[str, Any] | None:
+    """Bytes + MIME for the authorized retrieval endpoint of a given kind.
+
+    Step 24C-D-6: for ATTESTATION files there may be several current files, so
+    callers that need one specific document must pass an explicit file id. This
+    helper exists for kinds with a single current file (profile photos).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, server_id, file_type, mime_type, original_filename,
+                   file_size, is_current, created_at, content
+            FROM server_files
+            WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            server_id,
+            file_type,
+        )
+        return dict(row) if row else None
+
+
+async def get_file_content_by_id(
+    server_id: str, file_id: str, file_type: str
+) -> dict[str, Any] | None:
+    """Bytes + MIME for one specific file, scoped to its owning server.
+
+    Scoping by BOTH server_id and file_id is what prevents a caller from
+    reaching another server's document by guessing a file id.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, server_id, file_type, mime_type, original_filename,
+                   file_size, is_current, created_at, content
+            FROM server_files
+            WHERE id = $1 AND server_id = $2 AND file_type = $3
+            LIMIT 1
+            """,
+            file_id,
+            server_id,
+            file_type,
+        )
+        return dict(row) if row else None
+
+
+async def get_file_metadata_by_id(
+    server_id: str, file_id: str, file_type: str
+) -> dict[str, Any] | None:
+    """Metadata for one specific file, scoped to its owning server."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, server_id, file_type, mime_type, original_filename,
+                   file_size, is_current, created_at
+            FROM server_files
+            WHERE id = $1 AND server_id = $2 AND file_type = $3
+            LIMIT 1
+            """,
+            file_id,
+            server_id,
+            file_type,
+        )
+        return _metadata_from_row(dict(row)) if row else None
+
+
+async def ensure_server_exists(conn, server_id: str) -> None:
+    """Raise 404 when the server is unknown. Caller owns the transaction."""
+    exists = await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)", server_id
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Serveur introuvable."
+        )
+
+
+async def store_server_file(
+    conn,
+    server_id: str,
+    file_type: str,
+    data: bytes,
+    declared_mime_type: str | None,
+    original_filename: str | None,
+) -> dict[str, Any]:
+    """Store one file of a kind, inside the caller's transaction.
+
+    The caller owns the transaction so an attestation row and its document are
+    committed atomically -- a document can never exist without its attestation,
+    nor the reverse.
+
+    For kinds flagged ``single_current_per_server`` the previous current file is
+    deactivated (never deleted) so history survives a replacement.
+    """
+    mime_type = validate_file_content(data, declared_mime_type, file_type)
+    safe_filename = sanitize_filename(original_filename)
+    file_size = len(data)
+    kind = FILE_KINDS[file_type]
+
+    if kind["single_current_per_server"]:
+        await conn.execute(
+            """
+            UPDATE server_files
+            SET is_current = FALSE, updated_at = NOW()
+            WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+            """,
+            server_id,
+            file_type,
+        )
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO server_files (
+            server_id, file_type, content, mime_type,
+            original_filename, file_size, is_current
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+        RETURNING id, server_id, file_type, mime_type, original_filename,
+                  file_size, is_current, created_at
+        """,
+        server_id,
+        file_type,
+        data,
+        mime_type,
+        safe_filename,
+        file_size,
+    )
+    return _metadata_from_row(dict(row))
+
+
+# --------------------------------------------------------------------------
+# Profile photo wrappers.
+#
+# Kept as the public surface for Step 24C-D-5 so the router and its tests are
+# unaffected; the shared implementation lives in the helpers above.
+# --------------------------------------------------------------------------
+
+
+async def get_current_profile_photo_metadata(server_id: str) -> dict[str, Any] | None:
+    """Metadata only. This is what detail responses use; no BYTEA is selected."""
+    return await get_current_file_metadata(server_id, PROFILE_PHOTO_FILE_TYPE)
 
 
 async def has_profile_photo(server_id: str) -> bool:
@@ -207,20 +442,7 @@ async def load_servers_with_profile_photo(server_ids: list[str]) -> dict[str, bo
 
 async def get_current_profile_photo_content(server_id: str) -> dict[str, Any] | None:
     """Bytes + MIME for the authorized photo endpoint only."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id, server_id, file_type, mime_type, original_filename,
-                   file_size, is_current, created_at, content
-            FROM server_files
-            WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
-            LIMIT 1
-            """,
-            server_id,
-            PROFILE_PHOTO_FILE_TYPE,
-        )
-        return dict(row) if row else None
+    return await get_current_file_content(server_id, PROFILE_PHOTO_FILE_TYPE)
 
 
 async def upload_profile_photo(
@@ -233,55 +455,22 @@ async def upload_profile_photo(
 
     Replacement deactivates the previous current file instead of deleting it, so
     history is preserved. The insert and the deactivation happen in one
-    transaction with the old row locked, and a partial UNIQUE index on
-    (server_id, file_type) WHERE is_current guarantees at most one current file
-    even under concurrent uploads.
+    transaction, and a partial UNIQUE index on (server_id, file_type)
+    WHERE is_current guarantees at most one current file even under concurrent
+    uploads.
     """
-    mime_type = validate_profile_photo(data, declared_mime_type)
-    safe_filename = sanitize_filename(original_filename)
-    file_size = len(data)
-
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            exists = await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)", server_id
-            )
-            if not exists:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Serveur introuvable.",
-                )
-
-            await conn.execute(
-                """
-                UPDATE server_files
-                SET is_current = FALSE, updated_at = NOW()
-                WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
-                """,
-                server_id,
-                PROFILE_PHOTO_FILE_TYPE,
-            )
-
-            row = await conn.fetchrow(
-                """
-                INSERT INTO server_files (
-                    server_id, file_type, content, mime_type,
-                    original_filename, file_size, is_current
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-                RETURNING id, server_id, file_type, mime_type, original_filename,
-                          file_size, is_current, created_at
-                """,
+            await ensure_server_exists(conn, server_id)
+            return await store_server_file(
+                conn,
                 server_id,
                 PROFILE_PHOTO_FILE_TYPE,
                 data,
-                mime_type,
-                safe_filename,
-                file_size,
+                declared_mime_type,
+                original_filename,
             )
-
-    return _metadata_from_row(dict(row))
 
 
 async def delete_current_profile_photo(server_id: str) -> bool:

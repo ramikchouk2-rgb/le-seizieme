@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # means revisiting table bloat and backup size.
     MAX_PROFILE_PHOTO_BYTES: int = 2 * 1024 * 1024
 
+    # Step 24C-D-6: maximum accepted professional attestation document size
+    # (5 MiB). Documents are larger than avatars, but BYTEA storage means the
+    # ceiling should stay modest.
+    MAX_ATTESTATION_BYTES: int = 5 * 1024 * 1024
+
     PORT: int = 8000
 
     def validate_production(self) -> None:

@@ -64,13 +64,14 @@ Serveurs événementiels.
 **IMPORTANT** : L'adresse exacte du domicile n'est pas stockée dans cette table.
 
 ### server_files
-Fichiers binaires rattachés à un serveur (photos de profil). **Étape 24C-D-5.**
+Fichiers binaires rattachés à un serveur (photos de profil **et** documents
+d'attestation). **Étapes 24C-D-5 et 24C-D-6.**
 
 | Colonne | Type | Description |
 |---------|------|-------------|
 | id | UUID | Clé primaire |
 | server_id | UUID | Serveur (FK servers, ON DELETE CASCADE) |
-| file_type | server_file_type | Type de fichier (`PROFILE_PHOTO`) |
+| file_type | server_file_type | Type de fichier (`PROFILE_PHOTO`, `ATTESTATION`) |
 | content | BYTEA | Contenu binaire |
 | mime_type | VARCHAR(100) | Type MIME vérifié |
 | original_filename | VARCHAR(255) | Nom d'origine, nettoyé (facultatif) |
@@ -86,20 +87,38 @@ d'adresser un fichier sans passer par un endpoint authentifié.
 **Pas de métadonnées GPS.** La table ne contient aucune colonne de localisation.
 Une photo n'est jamais associée à une position.
 
-**Remplacement non destructif.** Uploader une nouvelle photo ne supprime pas
-l'ancienne : l'ancienne passe à `is_current = FALSE` et reste en base. Un index
-unique partiel `(server_id, file_type) WHERE is_current` garantit qu'un seul
-fichier est courant par type et par serveur, y compris en cas d'uploads
-concurrents.
+**Deux sémantiques de cycle de vie, une seule table.** Le comportement dépend de
+`file_type` :
+
+- `PROFILE_PHOTO` — un seul fichier courant. Uploader une nouvelle photo ne
+  supprime pas l'ancienne : l'ancienne passe à `is_current = FALSE` et reste en
+  base.
+- `ATTESTATION` — documents **append-only**. Un serveur peut légitimement
+  détenir plusieurs documents courants, un document rejeté reste consultable pour
+  l'audit, et un document remplacé n'est jamais écrasé.
+
+L'index unique partiel qui garantissait l'unicité du fichier courant est donc
+**restreint aux photos** : `idx_server_files_unique_current_photo` porte le
+prédicat `WHERE is_current AND file_type = 'PROFILE_PHOTO'`. Un index portant
+seulement `WHERE is_current` — son état avant cette étape — rejetterait à tort le
+second document d'attestation d'un serveur par violation d'unicité.
+
+Le prédicat ne cite que l'étiquette `PROFILE_PHOTO`, préexistante : l.index peut
+donc être évalué dans la transaction qui ajoute la nouvelle valeur d'énumération
+(PostgreSQL interdit d'utiliser une étiquette non encore committée dans le DDL).
+La comparaison est une égalité d'énumération, pas un transtypage `::text`, car un
+prédicat d'index ne peut référencer que des expressions `IMMUTABLE` et le
+transtypage enum→text ne l'est pas.
 
 **Contraintes.** Contenu non vide ; `file_size` doit être égal à
-`octet_length(content)` ; `mime_type` limité à JPEG / PNG / WebP ; le nom de
+`octet_length(content)` ; `mime_type` limité à PDF / JPEG / PNG / WebP ; le nom de
 fichier ne peut contenir de séparateur de chemin.
 
 **Validation par contenu, jamais par extension.** Le service compare les octets
 d'en-tête (*magic bytes*) au type MIME déclaré. Le nom de fichier et le
 `Content-Type` du client peuvent refuser un fichier, jamais l'authentifier.
-Taille maximale : `MAX_PROFILE_PHOTO_BYTES` (2 Mio par défaut).
+Tailles maximales distinctes par type : `MAX_PROFILE_PHOTO_BYTES` (2 Mio) et
+`MAX_ATTESTATION_BYTES` (5 Mio).
 
 **Légalité de `servers.profile_photo`.** Cette colonne TEXT est héritée : aucun
 code ne la lit ni ne l'écrit. Elle n'est pas supprimée à cette étape et
@@ -107,6 +126,62 @@ code ne la lit ni ne l'écrit. Elle n'est pas supprimée à cette étape et
 `servers.profile_photo`.
 
 Migration : `database/migrations/20261001_server_files.sql` (idempotente).
+Étape 24C-D-6 : `database/migrations/20261002_server_attestations.sql`
+(idempotente).
+
+### server_attestations
+Attestations professionnelles d'un serveur. **Étape 24C-D-6.**
+
+| Colonne | Type | Description |
+|---------|------|-------------|
+| id | UUID | Clé primaire |
+| server_id | UUID | Serveur (FK servers, ON DELETE CASCADE) |
+| file_id | UUID | Document (FK server_files, ON DELETE RESTRICT) |
+| qualification_name | VARCHAR(200) | Intitulé de la qualification, non vide |
+| issuing_organization | VARCHAR(200) | Organisme émetteur (facultatif) |
+| issued_on | DATE | Date de délivrance (facultatif) |
+| expires_on | DATE | Date d'expiration (facultatif) |
+| status | attestation_status | `PENDING` / `VERIFIED` / `REJECTED` / `SUPERSEDED` |
+| rejection_reason | TEXT | Motif de rejet (obligatoire si `REJECTED`) |
+| verified_at | TIMESTAMP | Date de vérification |
+| verified_by | UUID | Vérificateur (FK users) |
+| superseded_by_id | UUID | Attestation qui remplace celle-ci |
+| created_at | TIMESTAMP | Date de création |
+| updated_at | TIMESTAMP | Date de modification |
+
+**Append-only.** Un envoi crée une ligne `PENDING` et ne modifie jamais une ligne
+existante. Un renouvellement de qualification est donc un nouvel envoi suivi d'un
+remplacement explicite de l'ancien document, jamais une réécriture.
+
+**Un envoi ne valide jamais automatiquement.** Le seul moyen d'obtenir le statut
+`VERIFIED` est une décision explicite d'un MANAGER ou d'un ADMIN. Le champ
+`counts_as_verified_qualification` valant vrai uniquement pour `VERIFIED`, seul lui
+doit piloter un décompte de qualifications.
+
+**Transitions autorisées.**
+
+| Depuis | Vers | Condition |
+|--------|------|-----------|
+| `PENDING` | `VERIFIED` | MANAGER/ADMIN ; le vérificateur est l'utilisateur authentifié, jamais un choix du client |
+| `PENDING` | `REJECTED` | MANAGER/ADMIN ; motif non vide obligatoire |
+| `PENDING` | `SUPERSEDED` | MANAGER/ADMIN |
+| `VERIFIED` | `SUPERSEDED` | MANAGER/ADMIN ; **le document de remplacement est obligatoire** |
+
+`REJECTED` et `SUPERSEDED` sont terminaux. Il n'existe délibérément **aucune**
+transition `VERIFIED → REJECTED` ni `VERIFIED → PENDING` : une attestation
+vérifiée ne peut pas être révoquée ni rétrogradée à cette étape. Une révocation
+exigerait une décision et une justification propres, hors périmètre ici.
+
+`VERIFIED → SUPERSEDED` n'est pas une révocation : le document reste vérifié avec
+son `verified_at` et son `verified_by` conservés comme piste d'audit, et il pointe
+vers le document qui le remplace. Exiger le remplacement empêche une qualification
+réelle de cesser silencieusement de compter.
+
+**Conservation de l'historique.** Un document rejeté ou remplacé reste consultable
+pour l'audit. `ON DELETE RESTRICT` sur `file_id` empêche la suppression d'un
+document encore référencé.
+
+Migration : `database/migrations/20261002_server_attestations.sql` (idempotente).
 
 ### server_locations
 Historique des localisations des serveurs.

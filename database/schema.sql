@@ -31,7 +31,8 @@ CREATE TYPE ranking_status AS ENUM ('CALCULATED', 'PAID', 'ARCHIVED');
 CREATE TYPE transaction_type AS ENUM ('EARNED', 'BONUS', 'PENALTY', 'ADJUSTMENT');
 CREATE TYPE user_role AS ENUM ('ADMIN', 'MANAGER', 'STAFF');
 CREATE TYPE attendance_status AS ENUM ('EXPECTED', 'PRESENT', 'LATE', 'ABSENT', 'EXCUSED', 'LEFT');
-CREATE TYPE server_file_type AS ENUM ('PROFILE_PHOTO');
+CREATE TYPE server_file_type AS ENUM ('PROFILE_PHOTO', 'ATTESTATION');
+CREATE TYPE attestation_status AS ENUM ('PENDING', 'VERIFIED', 'REJECTED', 'SUPERSEDED');
 
 
 -- ===================================================
@@ -139,7 +140,7 @@ CREATE TABLE server_files (
     CONSTRAINT server_files_content_nonempty_check CHECK (octet_length(content) > 0),
     CONSTRAINT server_files_size_matches_content_check CHECK (file_size = octet_length(content)),
     CONSTRAINT server_files_mime_allowed_check CHECK (
-        mime_type IN ('image/jpeg', 'image/png', 'image/webp')
+        mime_type IN ('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
     ),
     CONSTRAINT server_files_filename_no_path_check CHECK (
         original_filename IS NULL
@@ -149,7 +150,69 @@ CREATE TABLE server_files (
 
 CREATE INDEX idx_server_files_server_id ON server_files(server_id);
 CREATE INDEX idx_server_files_current ON server_files(server_id, file_type) WHERE is_current = TRUE;
-CREATE UNIQUE INDEX idx_server_files_unique_current ON server_files(server_id, file_type) WHERE is_current = TRUE;
+-- One CURRENT file per server, but only for profile photos. Attestation
+-- documents are append-only: a server may hold several current documents.
+CREATE UNIQUE INDEX idx_server_files_unique_current_photo ON server_files(server_id, file_type) WHERE is_current = TRUE AND file_type = 'PROFILE_PHOTO';
+
+
+-- ===================================================
+-- SERVER_ATTESTATIONS
+-- Professional qualification documents (Step 24C-D-6).
+--
+-- BUSINESS RULE: an attestation is NOT a verified professional qualification
+-- until a Manager or Admin explicitly verifies it. An uploaded document is
+-- PENDING; only the VERIFIED status counts as a qualification.
+--
+-- The document bytes live in server_files (file_type = 'ATTESTATION'); this
+-- table only references the file. Rows are append-only: uploading creates a new
+-- PENDING row and never modifies or deletes an older one. Replacing an older
+-- document is a separate, explicit supersede action -- an upload alone does not
+-- move anything to SUPERSEDED.
+-- ===================================================
+
+CREATE TABLE server_attestations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    file_id UUID NOT NULL REFERENCES server_files(id) ON DELETE RESTRICT,
+    status attestation_status NOT NULL DEFAULT 'PENDING',
+    qualification_name VARCHAR(200) NOT NULL,
+    issuing_organization VARCHAR(200),
+    issued_on DATE,
+    expires_on DATE,
+    rejection_reason TEXT,
+    verified_at TIMESTAMP,
+    verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    superseded_by_id UUID REFERENCES server_attestations(id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT server_attestations_name_not_blank_check
+        CHECK (btrim(qualification_name) <> ''),
+    CONSTRAINT server_attestations_dates_ordered_check
+        CHECK (expires_on IS NULL OR issued_on IS NULL OR expires_on >= issued_on),
+    CONSTRAINT server_attestations_rejection_reason_check
+        CHECK (
+            status <> 'REJECTED'
+            OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> '')
+        ),
+    CONSTRAINT server_attestations_verified_fields_check
+        CHECK (
+            (status = 'VERIFIED'
+                AND verified_at IS NOT NULL
+                AND verified_by IS NOT NULL
+                AND rejection_reason IS NULL)
+            OR (status <> 'VERIFIED')
+        ),
+    CONSTRAINT server_attestations_rejected_not_verified_check
+        CHECK (status <> 'REJECTED' OR (verified_at IS NULL AND verified_by IS NULL)),
+    CONSTRAINT server_attestations_no_self_supersede_check
+        CHECK (superseded_by_id IS NULL OR superseded_by_id <> id)
+);
+
+CREATE INDEX idx_server_attestations_server_id ON server_attestations(server_id);
+CREATE INDEX idx_server_attestations_status ON server_attestations(status);
+CREATE INDEX idx_server_attestations_file_id ON server_attestations(file_id);
+CREATE INDEX idx_server_attestations_verified_by ON server_attestations(verified_by);
+CREATE INDEX idx_server_attestations_server_status ON server_attestations(server_id, status);
 
 
 -- ===================================================

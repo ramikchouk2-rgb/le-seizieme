@@ -10,6 +10,7 @@ from app.services.server_file_service import (
     get_current_profile_photo_metadata,
     load_servers_with_profile_photo,
 )
+from app.services.server_attestation_service import verified_qualification_counts
 from app.utils.datetime_utils import now_naive_utc
 from fastapi import HTTPException
 
@@ -218,6 +219,11 @@ async def load_server_list(
         photo_flags = await load_servers_with_profile_photo(
             [str(r["id"]) for r in rows]
         )
+        # Step 24C-D-6: one batched count query for the page, VERIFIED only.
+        # Never touches document bytes.
+        attestation_counts = await verified_qualification_counts(
+            [str(r["id"]) for r in rows]
+        )
         for r in rows:
             server_id = str(r["id"])
             item: dict[str, Any] = {
@@ -235,6 +241,7 @@ async def load_server_list(
                 "monthly_points": r["monthly_points"],
                 "rank": r["rank"] or 0,
                 "has_profile_photo": photo_flags.get(server_id, False),
+                "verified_attestation_count": attestation_counts.get(server_id, 0),
             }
             if r["vehicle_id"]:
                 item["vehicle"] = {
@@ -388,6 +395,10 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
         photo_metadata = await get_current_profile_photo_metadata(
             str(server_row["id"])
         )
+        # Step 24C-D-6: lightweight aggregate only, no document content.
+        verified_attestations = (
+            await verified_qualification_counts([str(server_row["id"])])
+        ).get(str(server_row["id"]), 0)
 
         return {
             "id": str(server_row["id"]),
@@ -403,6 +414,7 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             # Step 24C-D-5
             "has_profile_photo": photo_metadata is not None,
             "profile_photo": photo_metadata,
+            "verified_attestation_count": verified_attestations,
             "location": {
                 "city": server_row["city"],
                 "area": server_row["location_area"] or "",

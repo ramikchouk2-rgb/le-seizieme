@@ -19,6 +19,11 @@ import type {
   AuditLogItem,
   AuditLogListResponse,
   AuditLogFilters,
+  AttestationFileMetadata,
+  ServerAttestation,
+  ServerAttestationList,
+  ServerAttestationStatus,
+  ServerAttestationUploadMetadata,
 } from '@/app/lib/types';
 
 export type {
@@ -1020,6 +1025,166 @@ export async function deleteServerProfilePhoto(serverId: string): Promise<void> 
   await fetchAPI<{ message?: string }>(
     `/servers/${serverId}/files/profile-photo`,
     { method: 'DELETE' },
+  );
+}
+
+// ============================================================
+// Step 24C-D-6: professional attestations
+//
+// There is no public attestation URL. Document bytes come only from the
+// authorized per-attestation file endpoint, exactly like profile photos.
+// ============================================================
+
+/**
+ * Client-side pre-check limit for an uploaded document. Mirrors the backend
+ * `MAX_ATTESTATION_BYTES`; the backend re-validates by magic bytes regardless,
+ * so a stale value here cannot bypass the server check.
+ */
+export const MAX_ATTESTATION_BYTES = 5 * 1024 * 1024;
+
+export const ACCEPTED_ATTESTATION_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+] as const;
+
+export interface AttestationFileValidation {
+  valid: boolean;
+  error?: string;
+}
+
+/**
+ * Client-side pre-check only, for immediate feedback. The server is the sole
+ * authority and validates the actual file signature.
+ */
+export function validateAttestationFile(file: File): AttestationFileValidation {
+  if (file.size === 0) {
+    return { valid: false, error: 'Le fichier est vide.' };
+  }
+  if (file.size > MAX_ATTESTATION_BYTES) {
+    const mb = (MAX_ATTESTATION_BYTES / (1024 * 1024)).toFixed(0);
+    return {
+      valid: false,
+      error: `Fichier trop volumineux (maximum ${mb} Mo).`,
+    };
+  }
+  if (
+    !ACCEPTED_ATTESTATION_TYPES.includes(
+      file.type as (typeof ACCEPTED_ATTESTATION_TYPES)[number],
+    )
+  ) {
+    return {
+      valid: false,
+      error: 'Format non accepté. Formats acceptés : PDF, JPEG, PNG, WebP.',
+    };
+  }
+  return { valid: true };
+}
+
+export async function listServerAttestations(
+  serverId: string,
+  options: { includeSuperseded?: boolean } = {},
+): Promise<ServerAttestationList> {
+  const { includeSuperseded = true } = options;
+  return fetchAPI<ServerAttestationList>(
+    `/servers/${serverId}/attestations?include_superseded=${includeSuperseded}`,
+  );
+}
+
+export async function getServerAttestation(
+  serverId: string,
+  attestationId: string,
+): Promise<ServerAttestation> {
+  return fetchAPI<ServerAttestation>(
+    `/servers/${serverId}/attestations/${attestationId}`,
+  );
+}
+
+/**
+ * Upload a document. This is append-only: it always creates a NEW PENDING
+ * attestation and never modifies or replaces an existing one. A renewed
+ * qualification is therefore a second upload followed by an explicit supersede.
+ */
+export async function uploadServerAttestation(
+  serverId: string,
+  file: File,
+  metadata: ServerAttestationUploadMetadata,
+): Promise<ServerAttestation> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('qualification_name', metadata.qualification_name.trim());
+  if (metadata.issuing_organization) {
+    form.append('issuing_organization', metadata.issuing_organization.trim());
+  }
+  if (metadata.issued_on) form.append('issued_on', metadata.issued_on);
+  if (metadata.expires_on) form.append('expires_on', metadata.expires_on);
+
+  return fetchAPI<ServerAttestation>(
+    `/servers/${serverId}/attestations`,
+    { method: 'POST', body: form },
+  );
+}
+
+/** Explicit Manager/Admin decision. Uploading alone never verifies. */
+export async function verifyServerAttestation(
+  serverId: string,
+  attestationId: string,
+): Promise<ServerAttestation> {
+  return fetchAPI<ServerAttestation>(
+    `/servers/${serverId}/attestations/${attestationId}/verify`,
+    { method: 'PATCH' },
+  );
+}
+
+/** Reject. A reason is mandatory and is kept as the audit trail. */
+export async function rejectServerAttestation(
+  serverId: string,
+  attestationId: string,
+  rejectionReason: string,
+): Promise<ServerAttestation> {
+  return fetchAPI<ServerAttestation>(
+    `/servers/${serverId}/attestations/${attestationId}/reject`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ rejection_reason: rejectionReason.trim() }),
+    },
+  );
+}
+
+/**
+ * Mark as replaced. The record is retained for history and stops counting as a
+ * verified qualification. `supersededById` is mandatory when the attestation
+ * being replaced is already VERIFIED, so a real qualification can never
+ * silently stop counting.
+ */
+export async function supersedeServerAttestation(
+  serverId: string,
+  attestationId: string,
+  supersededById?: string,
+): Promise<ServerAttestation> {
+  return fetchAPI<ServerAttestation>(
+    `/servers/${serverId}/attestations/${attestationId}/supersede`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(
+        supersededById ? { superseded_by_id: supersededById } : {},
+      ),
+    },
+  );
+}
+
+/**
+ * Document bytes for one attestation. The endpoint is protected and marked
+ * uncacheable server-side, so the bytes must be requested explicitly rather
+ * than assumed to be at some public address.
+ */
+export async function getServerAttestationFile(
+  serverId: string,
+  attestationId: string,
+): Promise<Blob> {
+  return fetchBinary(
+    `/servers/${serverId}/attestations/${attestationId}/file`,
   );
 }
 

@@ -72,6 +72,10 @@ class ServerListItem(BaseModel):
     # to the LATER definition. Both must carry the same fields or the list
     # endpoint fails response validation. Do not add a field to only one.
     has_profile_photo: bool = False
+    # Step 24C-D-6: count of VERIFIED attestations only. PENDING, REJECTED and
+    # SUPERSEDED do not count. Deliberately informational: this step does not
+    # feed the staffing score.
+    verified_attestation_count: int = 0
 
 
 class ServerListResponse(BaseModel):
@@ -207,6 +211,8 @@ class ServerProfileResponse(BaseModel):
     # Step 24C-D-5: photo metadata, never photo bytes.
     has_profile_photo: bool = False
     profile_photo: Optional[ServerFileMetadataResponse] = None
+    # Step 24C-D-6: aggregate of VERIFIED attestations. Not a score input.
+    verified_attestation_count: int = 0
 
 
 class ServerStatsResponse(BaseModel):

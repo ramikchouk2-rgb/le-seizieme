@@ -9,6 +9,7 @@ import { useAnnouncer } from '@/app/components/ui/Announcer';
 import { Spinner } from '@/app/lib/loading';
 import ServerPhoto from '@/app/components/servers/ServerPhoto';
 import ProfilePhotoControls from '@/app/components/servers/ProfilePhotoControls';
+import ServerAttestationsPanel from '@/app/components/servers/ServerAttestationsPanel';
 import { getCurrentUser } from '@/app/lib/api-client';
 import Link from 'next/link';
 
@@ -29,6 +30,9 @@ export default function ServerProfilePage() {
   const [photoRefreshToken, setPhotoRefreshToken] = useState(0);
   const currentUser = getCurrentUser();
   const canManagePhoto = currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER';
+  // Step 24C-D-6: attestations use the same MANAGER/ADMIN permission model as
+  // the rest of server management, so the same guard applies.
+  const canManageAttestations = canManagePhoto;
 
   const handlePhotoChanged = () => {
     setPhotoRefreshToken((n) => n + 1);
@@ -165,6 +169,20 @@ export default function ServerProfilePage() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Professional attestations (Step 24C-D-6) */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <svg className="w-5 h-5 text-[#D4AF37]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Attestations professionnelles
+        </h3>
+        <ServerAttestationsPanel
+          serverId={serverId}
+          canManage={canManageAttestations}
+        />
       </div>
 
       {/* Identity Section */}

@@ -129,6 +129,68 @@ export interface ServerFileMetadata {
   created_at: string;
 }
 
+// ============================================================
+// Step 24C-D-6: professional attestations
+//
+// Attestations are append-only: uploading a document always creates a NEW record
+// and never modifies an existing one. Nothing here carries document bytes or a
+// URL -- `file` is descriptive metadata only.
+// ============================================================
+
+export type ServerAttestationStatus =
+  | 'PENDING'
+  | 'VERIFIED'
+  | 'REJECTED'
+  | 'SUPERSEDED';
+
+/** Descriptive metadata about the stored document. Never the bytes. */
+export interface AttestationFileMetadata {
+  id: string;
+  mime_type: string;
+  original_filename?: string | null;
+  file_size: number;
+}
+
+export interface ServerAttestation {
+  id: string;
+  server_id: string;
+  file_id: string;
+  status: ServerAttestationStatus;
+  status_label: string;
+  /**
+   * The field every consumer must use to decide whether this document counts as a
+   * real qualification. True only for VERIFIED, which requires an explicit
+   * Manager/Admin decision -- an upload alone never sets it.
+   */
+  counts_as_verified_qualification: boolean;
+  qualification_name: string;
+  issuing_organization?: string | null;
+  issued_on?: string | null;
+  expires_on?: string | null;
+  rejection_reason?: string | null;
+  verified_at?: string | null;
+  verified_by?: string | null;
+  superseded_by_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  file: AttestationFileMetadata;
+}
+
+export interface ServerAttestationList {
+  items: ServerAttestation[];
+  total: number;
+  /** Aggregate derived only from VERIFIED rows, so the UI need not recount. */
+  verified_count: number;
+}
+
+/** Metadata submitted alongside an uploaded document. `status` is not settable. */
+export interface ServerAttestationUploadMetadata {
+  qualification_name: string;
+  issuing_organization?: string;
+  issued_on?: string;
+  expires_on?: string;
+}
+
 export interface ServerStats {
   total: number;
   available: number;

@@ -1,8 +1,16 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.deps import get_current_user_dep, require_manager_or_admin
+from app.models.attestations import (
+    AttestationRejectRequest,
+    AttestationSupersedeRequest,
+    ServerAttestationCreateRequest,
+    ServerAttestationListResponse,
+    ServerAttestationResponse,
+)
 from app.models.servers import (
     ServerAvailabilityCreateRequest,
     ServerAvailabilityListResponse,
@@ -28,6 +36,15 @@ from app.services.server_file_service import (
     get_current_profile_photo_content,
     server_exists,
     upload_profile_photo,
+)
+from app.services.server_attestation_service import (
+    create_attestation,
+    get_attestation,
+    get_attestation_document,
+    list_attestations,
+    reject_attestation,
+    supersede_attestation,
+    verify_attestation,
 )
 from app.services.server_service import (
     add_server_skill,
@@ -215,3 +232,170 @@ async def delete_profile_photo_endpoint(server_id: str) -> dict[str, Any]:
             status_code=404, detail="Aucune photo de profil pour ce serveur."
         )
     return {"message": "Photo de profil supprimée avec succès."}
+
+
+# =========================================================
+# Professional attestations (Step 24C-D-6)
+#
+# Routes follow the existing server-management convention (`/api/servers/...`,
+# not a second `/api/v1` style) and reuse `require_manager_or_admin`, so
+# attestations inherit exactly the permissions of the rest of server management.
+# There is no STAFF self-service route.
+# =========================================================
+
+
+@router.post(
+    "/servers/{server_id}/attestations",
+    response_model=ServerAttestationResponse,
+    status_code=201,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def create_attestation_endpoint(
+    server_id: str,
+    file: UploadFile = File(...),
+    qualification_name: str | None = Form(default=None),
+    issuing_organization: str | None = Form(default=None),
+    issued_on: str | None = Form(default=None),
+    expires_on: str | None = Form(default=None),
+) -> ServerAttestationResponse:
+    """Upload a document and create a PENDING attestation.
+
+    The response status is always PENDING: uploading never verifies anything.
+
+    Metadata arrives as multipart form fields (this FastAPI version predates
+    Pydantic-model form binding) and is then validated through the same request
+    model the rest of the API uses, so the field rules stay in one place.
+    """
+    try:
+        payload = ServerAttestationCreateRequest(
+            qualification_name=qualification_name or "",
+            issuing_organization=issuing_organization,
+            issued_on=issued_on or None,
+            expires_on=expires_on or None,
+        )
+    except PydanticValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors()[0]["msg"] if exc.errors() else "Paramètres invalides.",
+        ) from exc
+
+    data = await file.read()
+    result = await create_attestation(
+        server_id=server_id,
+        data=data,
+        declared_mime_type=file.content_type,
+        original_filename=file.filename,
+        qualification_name=payload.qualification_name,
+        issuing_organization=payload.issuing_organization,
+        issued_on=payload.issued_on,
+        expires_on=payload.expires_on,
+    )
+    return ServerAttestationResponse(**result)
+
+
+@router.get(
+    "/servers/{server_id}/attestations",
+    response_model=ServerAttestationListResponse,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def list_attestations_endpoint(
+    server_id: str,
+    include_superseded: bool = Query(default=True),
+) -> ServerAttestationListResponse:
+    items = await list_attestations(
+        server_id, include_superseded=include_superseded
+    )
+    return ServerAttestationListResponse(
+        items=[ServerAttestationResponse(**i) for i in items],
+        total=len(items),
+        # Only VERIFIED counts as a qualification.
+        verified_count=sum(
+            1 for i in items if i["counts_as_verified_qualification"]
+        ),
+    )
+
+
+@router.get(
+    "/servers/{server_id}/attestations/{attestation_id}",
+    response_model=ServerAttestationResponse,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def get_attestation_endpoint(
+    server_id: str, attestation_id: str
+) -> ServerAttestationResponse:
+    return ServerAttestationResponse(**await get_attestation(server_id, attestation_id))
+
+
+@router.get(
+    "/servers/{server_id}/attestations/{attestation_id}/file",
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def get_attestation_file_endpoint(
+    server_id: str, attestation_id: str
+) -> Response:
+    """Return the document bytes to an authorized Manager/Admin.
+
+    The only attestation endpoint that returns content. Private and uncacheable,
+    like the profile photo endpoint, and it never emits a public URL.
+    """
+    row = await get_attestation_document(server_id, attestation_id)
+    return Response(
+        content=bytes(row["content"]),
+        media_type=row["mime_type"],
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+        },
+    )
+
+
+@router.patch(
+    "/servers/{server_id}/attestations/{attestation_id}/verify",
+    response_model=ServerAttestationResponse,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def verify_attestation_endpoint(
+    server_id: str,
+    attestation_id: str,
+    current_user: dict = Depends(require_manager_or_admin),
+) -> ServerAttestationResponse:
+    """Explicitly verify a PENDING attestation.
+
+    The verifier is taken from the authenticated user; it cannot be supplied or
+    overridden by the request body.
+    """
+    result = await verify_attestation(
+        server_id, attestation_id, str(current_user["id"])
+    )
+    return ServerAttestationResponse(**result)
+
+
+@router.patch(
+    "/servers/{server_id}/attestations/{attestation_id}/reject",
+    response_model=ServerAttestationResponse,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def reject_attestation_endpoint(
+    server_id: str, attestation_id: str, payload: AttestationRejectRequest
+) -> ServerAttestationResponse:
+    """Reject a PENDING attestation. A reason is mandatory."""
+    return ServerAttestationResponse(
+        **await reject_attestation(server_id, attestation_id, payload.rejection_reason)
+    )
+
+
+@router.patch(
+    "/servers/{server_id}/attestations/{attestation_id}/supersede",
+    response_model=ServerAttestationResponse,
+    dependencies=[Depends(require_manager_or_admin)],
+)
+async def supersede_attestation_endpoint(
+    server_id: str, attestation_id: str, payload: AttestationSupersedeRequest
+) -> ServerAttestationResponse:
+    """Mark an attestation as replaced. The record is kept for history."""
+    return ServerAttestationResponse(
+        **await supersede_attestation(
+            server_id, attestation_id, payload.superseded_by_id
+        )
+    )
