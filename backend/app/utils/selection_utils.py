@@ -16,6 +16,22 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return round(R * c, 1)
 
 
+def route_distance_km(points: list[tuple[float, float]]) -> float:
+    """Total distance of a route visited in the given order.
+
+    ``points`` is the ordered itinerary: driver -> passenger 1 -> ... -> venue.
+    Each leg is measured from the previous stop, so no leg is counted twice and
+    a spread-out group is not over-counted the way a driver-to-everyone sum
+    would. An empty or single-point itinerary has zero length.
+    """
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for (prev_lat, prev_lon), (next_lat, next_lon) in zip(points, points[1:]):
+        total += haversine_km(prev_lat, prev_lon, next_lat, next_lon)
+    return total
+
+
 def normalize_text(text: str) -> str:
     import unicodedata
     normalized = unicodedata.normalize("NFD", text.lower())

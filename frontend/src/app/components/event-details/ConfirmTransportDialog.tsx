@@ -77,7 +77,12 @@ export default function ConfirmTransportDialog({
               </p>
 
             <div className="space-y-3">
-              {groups.map((group, index) => (
+              {groups.map((group, index) => {
+                // Step 24C-D-4: prefer the end-to-end route distance, which is
+                // the same figure the recommendation panel shows.
+                const routeDistance =
+                  group.estimated_route_distance_km ?? group.estimated_distance_km;
+                return (
                 <div key={group.group_id} className="bg-gray-50 rounded-lg p-3">
                   <p className="text-sm font-semibold text-gray-900">Groupe {index + 1}</p>
                   <p className="text-xs text-gray-500 mt-1">
@@ -85,10 +90,20 @@ export default function ConfirmTransportDialog({
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     {group.passenger_count} passager{group.passenger_count !== 1 ? 's' : ''}
-                    {group.estimated_distance_km !== undefined && ` • ${group.estimated_distance_km.toFixed(1)} km estimés`}
+                    {routeDistance !== undefined && (
+                      <>
+                        {' • '}
+                        {group.has_exact_location ? '' : '≈ '}
+                        {routeDistance.toFixed(1)} km estimés
+                        {group.has_exact_location
+                          ? ''
+                          : ' (position du lieu approximative)'}
+                      </>
+                    )}
                   </p>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="flex justify-end gap-2">

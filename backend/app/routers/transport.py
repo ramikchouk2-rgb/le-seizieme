@@ -8,6 +8,7 @@ from app.models.transport_assignment import (
     TransportConfirmationResponse,
     TransportDriverResponse,
     TransportPassengerResponse,
+    TransportRecommendationGroupResponse,
     TransportRecommendationResponse,
     TransportUnassignedPassengerResponse,
 )
@@ -25,9 +26,11 @@ async def recommend_transport_endpoint(event_id: str) -> TransportRecommendation
     return TransportRecommendationResponse(
         event_id=result["event_id"],
         transport_status=result["transport_status"],
+        has_exact_location=result.get("has_exact_location", False),
         drivers=[TransportDriverResponse(**d) for d in result.get("drivers", [])],
         passengers=[TransportPassengerResponse(**p) for p in result.get("passengers", [])],
         unassigned_passengers=[TransportUnassignedPassengerResponse(**u) for u in result.get("unassigned_passengers", [])],
+        groups=[TransportRecommendationGroupResponse(**g) for g in result.get("groups", [])],
         total_selected=result.get("total_selected", 0),
         total_assigned=result.get("total_assigned", 0),
         total_unassigned=result.get("total_unassigned", 0),

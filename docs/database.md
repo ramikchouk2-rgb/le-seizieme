@@ -14,7 +14,34 @@ Référentiel des villes.
 |---------|------|-------------|
 | id | UUID | Clé primaire |
 | name | VARCHAR(100) | Nom unique de la ville |
+| latitude | NUMERIC(10,8) | Position de référence de la ville (nullable) |
+| longitude | NUMERIC(11,8) | Position de référence de la ville (nullable) |
 | created_at | TIMESTAMP | Date de création |
+
+**Coordonnées de référence** : `latitude`/`longitude` placent la ville sur la carte
+lorsque l'événement n'a pas encore ses propres coordonnées. Le couple est
+contraint (`latitude` et `longitude` sont tous deux nuls ou tous deux renseignés,
+et les plages -90..90 / -180..180 sont vérifiées), donc une demi-coordination ne
+peut jamais être interprétée comme l'origine (0, 0).
+
+Ces colonnes sont **volontairement laissées vides** : aucun remplissage
+automatique n'a été effectué, car inventer une position pour une ville produirait
+de fausses distances. Tant qu'elles sont nulles, le système retombe sur la
+valeur technique globale (`DEFAULT_EVENT_LATITUDE` / `DEFAULT_EVENT_LONGITUDE`)
+et signale la position comme approximative.
+
+Résolution de la position d'un événement, dans cet ordre :
+
+1. les coordonnées de l'événement lui-même → position exacte ;
+2. les coordonnées de sa ville → position approximative ;
+3. la valeur technique globale → position approximative.
+
+La position GPS personnelle d'un serveur n'est **jamais** utilisée comme position
+de lieu. Les API exposent uniquement le booléen `has_exact_location` ; le détail
+de la source utilisée est interne.
+
+Migration : `database/migrations/20260930_city_reference_coordinates.sql`
+(idempotente).
 
 ### servers
 Serveurs événementiels.

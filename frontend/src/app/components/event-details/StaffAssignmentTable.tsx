@@ -12,6 +12,11 @@ interface StaffAssignmentTableProps {
   roleFilter: string;
   statusFilter: string;
   availabilityFilter: string;
+  /**
+   * Step 24C-D-4: false when the event venue came from the city reference or the
+   * global fallback, in which case distances are rendered as approximate.
+   */
+  hasExactLocation?: boolean;
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -31,9 +36,13 @@ function SortIcon({ field, active, order }: { field: string; active: boolean; or
  * A null distance means the distance is UNKNOWN, not zero. It is rendered as an
  * em dash so an unknown value is never presented as a measured "0.0 km".
  */
-function formatDistance(distanceKm: number | null | undefined): string {
+function formatDistance(
+  distanceKm: number | null | undefined,
+  approximate = false,
+): string {
   if (distanceKm === null || distanceKm === undefined) return '—';
-  return `${distanceKm.toFixed(1)} km`;
+  // Step 24C-D-4: an approximate venue must never read as a measured distance.
+  return `${approximate ? '≈ ' : ''}${distanceKm.toFixed(1)} km`;
 }
 
 /**
@@ -62,6 +71,7 @@ export default function StaffAssignmentTable({
   roleFilter,
   statusFilter,
   availabilityFilter,
+  hasExactLocation = true,
 }: StaffAssignmentTableProps) {
   let filtered = [...assignments];
 
@@ -215,7 +225,7 @@ export default function StaffAssignmentTable({
                   </div>
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                  {formatDistance(assignment.distance_km)}
+                  {formatDistance(assignment.distance_km, !hasExactLocation)}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
                   {assignment.years_experience} ans

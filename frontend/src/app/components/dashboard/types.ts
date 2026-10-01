@@ -38,6 +38,11 @@ export interface Event {
   event_type?: string;
   required_response_minutes?: number | null;
   notes?: string | null;
+  /**
+   * Step 24C-D-4. Optional because the shared `Event` interface also serves
+   * the events list, whose payload does not carry it.
+   */
+  has_exact_location?: boolean;
 }
 
 export interface EventRequirement {
@@ -128,6 +133,10 @@ export interface EventDetailData {
       capacity: number;
       passenger_count: number;
       estimated_distance_km: number | null;
+      /** driver -> pickups -> venue. Prefer this over estimated_distance_km. */
+      estimated_route_distance_km: number | null;
+      /** false when the venue leg used the city reference or the global fallback. */
+      has_exact_location: boolean;
       passengers: {
         server_id: string;
         name: string;

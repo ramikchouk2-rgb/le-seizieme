@@ -531,6 +531,10 @@ async def get_urgent_status(event_id: str) -> dict[str, Any]:
     return {
         "event_id": str(event["id"]),
         "is_urgent": event["is_urgent"],
+        # Step 24C-D-4: offer distances are only produced when the venue is
+        # exact (see the guard above), so this flag tells the client whether any
+        # distance it receives is trustworthy.
+        "has_exact_location": has_exact_location,
         "event": {
             "id": event["id"],
             "name": event["name"],

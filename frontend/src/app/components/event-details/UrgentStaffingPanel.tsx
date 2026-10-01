@@ -222,6 +222,12 @@ export default function UrgentStaffingPanel({ eventId, eventUrgent }: UrgentStaf
         </div>
       )}
 
+      {status.has_exact_location === false && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-4">
+          Position du lieu approximative — les distances ne sont pas calculées.
+        </p>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div className="bg-gray-50 rounded-lg p-3 text-center">
           <p className="text-2xl font-bold text-gray-900">{status.offers_sent}</p>

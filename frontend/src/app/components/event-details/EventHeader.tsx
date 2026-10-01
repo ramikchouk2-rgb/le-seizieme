@@ -26,6 +26,13 @@ export default function EventHeader({ event, onEdit }: EventHeaderProps) {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">{event.name}</h1>
           <p className="text-sm text-gray-500">{event.city}</p>
+          {/* Step 24C-D-4: state plainly when the venue has no stored
+              coordinates, so no derived distance is read as a measurement. */}
+          {event.has_exact_location === false && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 inline-block">
+              Position du lieu approximative — les distances calculées sont estimées.
+            </p>
+          )}
           <div className="flex items-center gap-2 mt-2">
             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
               event.status === 'PLANNED' ? 'bg-blue-50 text-blue-700 border-blue-200' :

@@ -312,6 +312,12 @@ export interface EventDetailData {
     required_response_minutes: number | null;
     status: string;
     notes: string | null;
+    /**
+     * false when the venue position came from the city reference or the global
+     * technical fallback instead of the event's own coordinates. Any distance
+     * derived from this venue must then be presented as approximate.
+     */
+    has_exact_location: boolean;
   };
   staffing: {
     requested: number;
@@ -358,6 +364,10 @@ export interface EventDetailData {
       capacity: number;
       passenger_count: number;
       estimated_distance_km: number | null;
+      /** driver -> pickups -> venue. Prefer this over estimated_distance_km. */
+      estimated_route_distance_km: number | null;
+      /** false when the venue leg used the city reference or the global fallback. */
+      has_exact_location: boolean;
       passengers: {
         server_id: string;
         name: string;

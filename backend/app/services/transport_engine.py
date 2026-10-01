@@ -4,9 +4,11 @@ from typing import Any
 
 from app.core.database import get_pool
 from app.services.selection_engine import generate_staff_recommendations
-from app.utils.selection_utils import haversine_km
+from app.utils.event_utils import load_event, resolve_event_location
+from app.utils.selection_utils import haversine_km, route_distance_km
 
 MAX_PICKUP_DISTANCE_KM = 20
+
 
 
 async def load_vehicles_for_servers(server_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -94,17 +96,26 @@ async def recommend_transport(event_id: str) -> dict[str, Any]:
         return {
             "event_id": event_id,
             "transport_status": "NO_SELECTED_STAFF",
+            "has_exact_location": bool(recommendation.get("event", {}).get("has_exact_location")),
             "drivers": [],
             "passengers": [],
             "unassigned_passengers": [],
+            "groups": [],
             "total_selected": 0,
             "total_assigned": 0,
             "total_unassigned": 0,
         }
 
-    event = recommendation["event"]
+    # Step 24C-D-4: resolving from the full event row keeps the recommendation
+    # on the same venue (exact, then city reference, then global fallback) that
+    # the confirmation step uses, so both endpoints agree on the destination and
+    # on whether the resulting distances are exact. The venue is the event's own
+    # position; a server's GPS is never used.
+    event = await load_event(event_id) or recommendation["event"]
     event_start = datetime.fromisoformat(event["start_datetime"])
     event_end = datetime.fromisoformat(event["end_datetime"])
+
+    event_lat, event_lon, has_exact_location = resolve_event_location(event)
 
     server_ids = [s["server_id"] for s in selected_servers]
     vehicles = await load_vehicles_for_servers(server_ids)
@@ -182,6 +193,35 @@ async def recommend_transport(event_id: str) -> dict[str, Any]:
                 "distance_from_driver_km": p["distance_km"],
             })
 
+        # Step 24C-D-4: the route is the ordered itinerary
+        # driver -> passenger 1 -> ... -> venue, measured leg by leg so no leg is
+        # counted twice and a spread-out group is not over-counted the way a
+        # driver-to-everyone sum would.
+        itinerary: list[tuple[float, float]] = [(float(driver_lat), float(driver_lon))]
+        itinerary.extend(
+            (float(p["latitude"]), float(p["longitude"])) for p in selected_passengers
+        )
+        itinerary.append((event_lat, event_lon))
+        route_distance = route_distance_km(itinerary)
+
+        # Step 24C-D-4: `estimated_distance_km` is the legacy field and must mean
+        # the same thing here as in the confirmation response, which persists
+        # "driver-to-passenger legs plus the final venue leg". It previously
+        # omitted the venue leg here, so the number changed when the manager
+        # confirmed the very group they were looking at. Kept for backward
+        # compatibility; `estimated_route_distance_km` remains authoritative.
+        pickup_distance = sum(p["distance_from_driver_km"] for p in group_passengers)
+        final_leg = 0.0
+        if selected_passengers:
+            last_pickup = selected_passengers[-1]
+            final_leg = haversine_km(
+                float(last_pickup["latitude"]),
+                float(last_pickup["longitude"]),
+                event_lat,
+                event_lon,
+            )
+        estimated_distance = round(pickup_distance + final_leg, 2)
+
         transport_groups.append({
             "driver": {
                 "server_id": driver["server_id"],
@@ -193,7 +233,9 @@ async def recommend_transport(event_id: str) -> dict[str, Any]:
             },
             "passengers": group_passengers,
             "estimated_passenger_count": len(group_passengers),
-            "estimated_distance_km": round(sum(p["distance_from_driver_km"] for p in group_passengers), 1),
+            "estimated_distance_km": estimated_distance,
+            "estimated_route_distance_km": round(route_distance, 2),
+            "has_exact_location": has_exact_location,
         })
 
     unassigned_passengers: list[dict[str, Any]] = []
@@ -230,9 +272,11 @@ async def recommend_transport(event_id: str) -> dict[str, Any]:
     return {
         "event_id": event_id,
         "transport_status": "SUCCESS",
+        "has_exact_location": has_exact_location,
         "drivers": [g["driver"] for g in transport_groups],
         "passengers": [p for g in transport_groups for p in g["passengers"]],
         "unassigned_passengers": unassigned_passengers,
+        "groups": transport_groups,
         "total_selected": len(selected_servers),
         "total_assigned": total_assigned,
         "total_unassigned": len(unassigned_passengers),

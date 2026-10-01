@@ -40,7 +40,13 @@ CREATE TYPE attendance_status AS ENUM ('EXPECTED', 'PRESENT', 'LATE', 'ABSENT', 
 CREATE TABLE cities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL UNIQUE,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    latitude NUMERIC(10, 8) CHECK (latitude IS NULL OR (latitude >= -90 AND latitude <= 90)),
+    longitude NUMERIC(11, 8) CHECK (longitude IS NULL OR (longitude >= -180 AND longitude <= 180)),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT cities_coordinates_paired_check CHECK (
+        (latitude IS NULL AND longitude IS NULL)
+        OR (latitude IS NOT NULL AND longitude IS NOT NULL)
+    )
 );
 
 CREATE INDEX idx_cities_name ON cities(name);

@@ -353,11 +353,28 @@ export default function EventDetailPage() {
                           <p className="text-xs text-gray-500 mt-1">
                             {group.vehicle} • {group.capacity} places • {group.passenger_count} passager{group.passenger_count !== 1 ? 's' : ''}
                           </p>
-                          {group.estimated_distance_km !== undefined && group.estimated_distance_km !== null && (
-                            <p className="text-xs text-gray-500 mt-1">
-                              Distance estimée : {group.estimated_distance_km.toFixed(1)} km
-                            </p>
-                          )}
+                          {(() => {
+                            // Step 24C-D-4: prefer the end-to-end route
+                            // distance, which includes the final venue leg, and
+                            // flag it when the venue position is approximate.
+                            const routeDistance =
+                              group.estimated_route_distance_km
+                              ?? group.estimated_distance_km;
+                            if (routeDistance === undefined || routeDistance === null) {
+                              return null;
+                            }
+                            return (
+                              <p className="text-xs text-gray-500 mt-1">
+                                Distance estimée : {group.has_exact_location === false ? '≈ ' : ''}
+                                {routeDistance.toFixed(1)} km
+                                {group.has_exact_location === false && (
+                                  <span className="ml-1 text-amber-700">
+                                    (position du lieu approximative)
+                                  </span>
+                                )}
+                              </p>
+                            );
+                          })()}
                         </div>
                         <div className="mb-3">
                           <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Passagers</p>

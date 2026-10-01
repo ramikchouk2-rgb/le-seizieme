@@ -358,6 +358,10 @@ class EventDetailEventResponse(EventCoordinateMixin):
     required_response_minutes: Optional[int] = None
     status: str
     notes: Optional[str] = None
+    # Step 24C-D-4: False when the venue position shown/used came from the city
+    # reference or the global technical fallback instead of the event's own
+    # coordinates. Consumers must label any derived distance as approximate.
+    has_exact_location: bool = True
 
 
 class EventDetailStaffingResponse(BaseModel):
@@ -375,6 +379,12 @@ class EventDetailTransportGroupResponse(BaseModel):
     capacity: int
     passenger_count: int
     estimated_distance_km: Optional[float] = None
+    # Step 24C-D-4: end-to-end route distance (driver -> pickups -> venue),
+    # distinct from the historical `estimated_distance_km` pickup sum.
+    estimated_route_distance_km: Optional[float] = None
+    # False when the venue leg was computed from the city reference or from the
+    # global technical fallback rather than the event's own coordinates.
+    has_exact_location: bool = True
     passengers: list[dict[str, Any]] = []
     status: str
 

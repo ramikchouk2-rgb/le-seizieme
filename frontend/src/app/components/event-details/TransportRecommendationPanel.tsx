@@ -165,15 +165,19 @@ export default function TransportRecommendationPanel({
         vehicle: g.vehicle,
         capacity: g.capacity,
         passenger_count: g.passenger_count,
-        estimated_distance_km: g.estimated_distance_km,
+        estimated_distance_km: g.estimated_route_distance_km ?? g.estimated_distance_km,
+        has_exact_location: g.has_exact_location,
       }))
-    : recommendation.drivers.map((d) => ({
+    : recommendation.drivers.map((d, i) => ({
         group_id: d.server_id,
         driver_name: d.name,
         vehicle: d.vehicle,
         capacity: d.capacity,
         passenger_count: 0,
-        estimated_distance_km: undefined,
+        estimated_distance_km: recommendation.groups?.[i]?.estimated_route_distance_km
+          ?? recommendation.groups?.[i]?.estimated_distance_km,
+        has_exact_location: recommendation.groups?.[i]?.has_exact_location
+          ?? recommendation.has_exact_location,
       }));
 
   return (
@@ -247,6 +251,17 @@ export default function TransportRecommendationPanel({
               const remainingCapacity = driver.available_seats - groupPassengersList.length;
               const isAtCapacity = remainingCapacity <= 0;
 
+              // Step 24C-D-4: the route distance covers driver -> pickups ->
+              // venue, so it depends on the venue position. It is the same
+              // figure the confirmation step reports. Falls back for older
+              // payloads that carry no groups.
+              const group = recommendation.groups?.[index];
+              const routeDistance =
+                group?.estimated_route_distance_km ?? group?.estimated_distance_km;
+              const isApproximateLocation = group
+                ? !group.has_exact_location
+                : !recommendation.has_exact_location;
+
               return (
                 <div key={driver.server_id} className="border border-gray-100 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-3">
@@ -281,6 +296,17 @@ export default function TransportRecommendationPanel({
                     <p className="text-xs text-gray-500">
                       Places restantes : {remainingCapacity} / {driver.available_seats}
                     </p>
+                    {routeDistance !== undefined && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Trajet estimé : {isApproximateLocation ? '≈ ' : ''}
+                        {routeDistance.toFixed(1)} km
+                        {isApproximateLocation && (
+                          <span className="ml-1 text-amber-700">
+                            (position du lieu approximative)
+                          </span>
+                        )}
+                      </p>
+                    )}
                   </div>
 
                   <div className="mb-3">

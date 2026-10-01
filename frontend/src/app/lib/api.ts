@@ -243,9 +243,38 @@ export interface StaffRecommendationResponse {
   status: string;
 }
 
+export interface TransportRecommendationGroup {
+  driver: {
+    server_id: string;
+    name: string;
+    vehicle: string;
+    capacity: number;
+    available_seats: number;
+    can_transport_coworkers: boolean;
+  };
+  passengers: {
+    server_id: string;
+    name: string;
+    pickup_order: number;
+    distance_from_driver_km: number;
+  }[];
+  estimated_passenger_count: number;
+  /** Sum of the driver-to-passenger legs plus the final venue leg. Prefer estimated_route_distance_km. */
+  estimated_distance_km?: number;
+  /** driver -> pickups -> venue. Identical semantics to the confirmation endpoint. */
+  estimated_route_distance_km?: number;
+  has_exact_location: boolean;
+}
+
 export interface TransportRecommendationResponse {
   event_id: string;
   transport_status: string;
+  /**
+   * false when the venue leg was computed from the city reference or the global
+   * technical fallback instead of the event's own coordinates. Any distance
+   * shown in that case must be presented as approximate.
+   */
+  has_exact_location: boolean;
   drivers: {
     server_id: string;
     name: string;
@@ -265,6 +294,7 @@ export interface TransportRecommendationResponse {
     name: string;
     reason: string;
   }[];
+  groups: TransportRecommendationGroup[];
   total_selected: number;
   total_assigned: number;
   total_unassigned: number;
@@ -286,7 +316,12 @@ export interface TransportConfirmationGroupResponse {
   vehicle: string;
   capacity: number;
   passenger_count: number;
+  /** Sum of the driver-to-passenger legs plus the final venue leg (legacy). */
   estimated_distance_km?: number;
+  /** driver -> pickups -> venue. Same semantics as the recommendation endpoint. */
+  estimated_route_distance_km?: number;
+  /** false when the venue leg used the city reference or the global fallback. */
+  has_exact_location: boolean;
 }
 
 export interface TransportConfirmationResponse {
@@ -703,6 +738,11 @@ export interface UrgentOffer {
 export interface UrgentStatus {
   event_id: string;
   is_urgent: boolean;
+  /**
+   * false when the venue came from the city reference or the global fallback.
+   * Offers only carry a distance_km when this is true.
+   */
+  has_exact_location: boolean;
   wave_number: number;
   wave_size: number;
   offers_sent: number;

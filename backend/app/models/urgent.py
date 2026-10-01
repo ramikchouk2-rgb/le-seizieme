@@ -28,6 +28,10 @@ class UrgentWaveResponse(BaseModel):
 class UrgentStatusResponse(BaseModel):
     event_id: str
     is_urgent: bool
+    # Step 24C-D-4: False when any distance in `offers` was derived from the
+    # city reference or the global technical fallback. Offers only carry a
+    # distance_km when this is True.
+    has_exact_location: bool = True
     wave_number: int = 0
     wave_size: int = 0
     offers_sent: int = 0

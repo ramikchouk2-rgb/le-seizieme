@@ -12,6 +12,7 @@ from app.services.availability_service import (
     get_event_scheduling_conflict,
 )
 from app.services.selection_engine import normalize_text, serialize_row
+from app.utils.selection_utils import route_distance_km
 from app.utils.event_utils import resolve_event_location
 from app.utils.selection_utils import haversine_km
 
@@ -146,9 +147,14 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
 
         event = serialize_row(dict(event_row))
         city_row = await conn.fetchrow(
-            "SELECT name FROM cities WHERE id = $1", event["city_id"]
+            "SELECT name, latitude, longitude FROM cities WHERE id = $1", event["city_id"]
         )
         city_name = city_row["name"] if city_row else ""
+        # Step 24C-D-4: carry the city reference position so an event with no
+        # stored coordinates falls back to its own city, not to the global
+        # technical fallback.
+        event["city_latitude"] = city_row["latitude"] if city_row else None
+        event["city_longitude"] = city_row["longitude"] if city_row else None
 
         requirements = await load_event_requirements_with_counts(event_id)
         assignments_raw = await load_event_staff_assignments(event_id)
@@ -241,6 +247,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
         transport_groups_raw = await conn.fetch(
             """
             SELECT tg.id, tg.driver_server_id, tg.vehicle_id, tg.estimated_distance_km,
+                   tg.departure_latitude, tg.departure_longitude,
+                   tg.destination_latitude, tg.destination_longitude,
                    v.brand, v.model, v.seats_total,
                    s.first_name, s.last_name
             FROM transport_groups tg
@@ -254,19 +262,25 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
 
         transport_groups = []
         for tg in transport_groups_raw:
+            # Step 24C-D-4: the pickup coordinates persisted at confirmation time
+            # are used to recompute the ordered itinerary distance. They are
+            # used only for this aggregation and are never returned.
             passengers_raw = await conn.fetch(
                 """
                 SELECT tp.server_id, tp.pickup_order, tp.pickup_status,
-                       s.first_name, s.last_name, sl.latitude, sl.longitude
+                       tp.pickup_latitude, tp.pickup_longitude,
+                       s.first_name, s.last_name
                 FROM transport_passengers tp
                 JOIN servers s ON tp.server_id = s.id
-                LEFT JOIN server_locations sl ON s.id = sl.server_id AND sl.is_current = TRUE
                 WHERE tp.transport_group_id = $1
                 ORDER BY tp.pickup_order ASC
                 """,
                 tg["id"],
             )
             passengers = []
+            itinerary: list[tuple[float, float]] = [
+                (float(tg["departure_latitude"]), float(tg["departure_longitude"]))
+            ]
             for p in passengers_raw:
                 passengers.append({
                     "server_id": str(p["server_id"]),
@@ -275,6 +289,13 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                     "pickup_status": p["pickup_status"],
                     "distance_km": None,
                 })
+                itinerary.append(
+                    (float(p["pickup_latitude"]), float(p["pickup_longitude"]))
+                )
+            if tg["destination_latitude"] is not None and tg["destination_longitude"] is not None:
+                itinerary.append(
+                    (float(tg["destination_latitude"]), float(tg["destination_longitude"]))
+                )
             transport_groups.append({
                 "group_id": str(tg["id"]),
                 "driver_server_id": str(tg["driver_server_id"]),
@@ -283,6 +304,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "capacity": tg["seats_total"],
                 "passenger_count": len(passengers),
                 "estimated_distance_km": float(tg["estimated_distance_km"]) if tg["estimated_distance_km"] is not None else None,
+                "estimated_route_distance_km": round(route_distance_km(itinerary), 2),
+                "has_exact_location": has_exact_location,
                 "passengers": passengers,
                 "status": "CONFIRMED",
             })
@@ -308,6 +331,7 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "required_response_minutes": event.get("required_response_minutes"),
                 "status": event["status"],
                 "notes": event.get("notes"),
+                "has_exact_location": has_exact_location,
             },
             "staffing": {
                 "requested": total_requested,
@@ -594,15 +618,21 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
 
             # The transport destination is the event venue. It is never derived
             # from a server's personal GPS position.
+            # Step 24C-D-4: the city reference position participates in the
+            # resolution hierarchy so an event without stored coordinates is
+            # routed to its own city rather than to the global fallback.
+            city_location = await conn.fetchrow(
+                "SELECT name, latitude, longitude FROM cities WHERE id = $1",
+                event_row["city_id"],
+            )
             event_location = {
                 "latitude": event_row["latitude"],
                 "longitude": event_row["longitude"],
+                "city_latitude": city_location["latitude"] if city_location else None,
+                "city_longitude": city_location["longitude"] if city_location else None,
             }
             event_lat, event_lon, has_exact_location = resolve_event_location(event_location)
-            city_row = await conn.fetchrow(
-                "SELECT name FROM cities WHERE id = $1", event_row["city_id"]
-            )
-            city_name = city_row["name"] if city_row else ""
+            city_name = city_location["name"] if city_location else ""
             address = event_row["address"] or ""
             if address and city_name:
                 destination_label = f"{address}, {city_name}"
@@ -892,6 +922,22 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                     )
                 total_distance = round(pickup_distance + last_leg, 2)
 
+                # Step 24C-D-4: `estimated_distance_km` keeps its historical
+                # meaning (driver-to-each-passenger sum + final venue leg) so
+                # stored and previously returned values stay comparable.
+                # `estimated_route_distance_km` is the true ordered itinerary
+                # distance -- driver -> passenger 1 -> ... -> venue -- computed
+                # the same way as the recommendation endpoint so the two agree.
+                itinerary: list[tuple[float, float]] = [
+                    (float(g["driver_latitude"]), float(g["driver_longitude"]))
+                ]
+                itinerary.extend(
+                    (float(p["latitude"]), float(p["longitude"]))
+                    for p in g["validated_passengers"]
+                )
+                itinerary.append((event_lat, event_lon))
+                route_distance = round(route_distance_km(itinerary), 2)
+
                 group_row = await conn.fetchrow(
                     """
                     INSERT INTO transport_groups (
@@ -945,6 +991,7 @@ async def confirm_transport(event_id: str, groups: list[dict[str, Any]]) -> dict
                     "capacity": g["capacity"],
                     "passenger_count": len(g["validated_passengers"]),
                     "estimated_distance_km": total_distance,
+                    "estimated_route_distance_km": route_distance,
                     "has_exact_location": has_exact_location,
                 })
 
