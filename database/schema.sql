@@ -590,7 +590,22 @@ CREATE INDEX idx_bonus_rules_active ON bonus_rules(active) WHERE active = TRUE;
 -- AUDIT_LOG
 -- ===================================================
 
-CREATE TYPE admin_audit_action AS ENUM ('USER_CREATED', 'USER_UPDATED', 'USER_DEACTIVATED');
+-- Step 24C-D-7: the six server-file / attestation actions below record
+-- administrative actions on server profile photos and professional
+-- attestations. They keep target_user_id NULL and identify the server through
+-- detail->>'server_id'. An upload that replaced an existing photo is still
+-- PROFILE_PHOTO_UPLOADED, distinguished by detail->>'replaced'.
+CREATE TYPE admin_audit_action AS ENUM (
+    'USER_CREATED',
+    'USER_UPDATED',
+    'USER_DEACTIVATED',
+    'PROFILE_PHOTO_UPLOADED',
+    'PROFILE_PHOTO_DELETED',
+    'ATTESTATION_UPLOADED',
+    'ATTESTATION_VERIFIED',
+    'ATTESTATION_REJECTED',
+    'ATTESTATION_SUPERSEDED'
+);
 
 CREATE TABLE audit_log (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

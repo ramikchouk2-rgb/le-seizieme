@@ -168,11 +168,14 @@ async def remove_skill_endpoint(server_id: str, skill_id: str) -> dict[str, str]
 async def upload_profile_photo_endpoint(
     server_id: str,
     file: UploadFile = File(...),
+    current_user: dict = Depends(require_manager_or_admin),
 ) -> ServerFileMetadataResponse:
     """Upload or replace a server's profile photo.
-
     Content is validated by magic bytes in the service layer; this handler only
     moves bytes and hands off. The response is metadata only.
+
+    Step 24C-D-7: `current_user` is the authenticated Manager/Admin and becomes
+    the audit actor. It can never come from the request body.
     """
     data = await file.read()
     metadata = await upload_profile_photo(
@@ -180,6 +183,7 @@ async def upload_profile_photo_endpoint(
         data=data,
         declared_mime_type=file.content_type,
         original_filename=file.filename,
+        actor_id=str(current_user["id"]),
     )
     return ServerFileMetadataResponse(**metadata)
 
@@ -221,12 +225,18 @@ async def get_profile_photo_endpoint(server_id: str) -> Response:
     "/servers/{server_id}/files/profile-photo",
     dependencies=[Depends(require_manager_or_admin)],
 )
-async def delete_profile_photo_endpoint(server_id: str) -> dict[str, Any]:
-    """Deactivate the current profile photo (row retained as history)."""
+async def delete_profile_photo_endpoint(
+    server_id: str,
+    current_user: dict = Depends(require_manager_or_admin),
+) -> dict[str, Any]:
+    """Deactivate the current profile photo (row retained as history).
+
+    Step 24C-D-7: the actor comes from the authenticated user so the deletion can
+    be audited. Authorization is unchanged.
+    """
     if not await server_exists(server_id):
         raise HTTPException(status_code=404, detail="Serveur introuvable.")
-
-    removed = await delete_current_profile_photo(server_id)
+    removed = await delete_current_profile_photo(server_id, actor_id=str(current_user["id"]))
     if not removed:
         raise HTTPException(
             status_code=404, detail="Aucune photo de profil pour ce serveur."
@@ -257,6 +267,7 @@ async def create_attestation_endpoint(
     issuing_organization: str | None = Form(default=None),
     issued_on: str | None = Form(default=None),
     expires_on: str | None = Form(default=None),
+    current_user: dict = Depends(require_manager_or_admin),
 ) -> ServerAttestationResponse:
     """Upload a document and create a PENDING attestation.
 
@@ -289,6 +300,7 @@ async def create_attestation_endpoint(
         issuing_organization=payload.issuing_organization,
         issued_on=payload.issued_on,
         expires_on=payload.expires_on,
+        actor_id=str(current_user["id"]),
     )
     return ServerAttestationResponse(**result)
 
@@ -377,11 +389,19 @@ async def verify_attestation_endpoint(
     dependencies=[Depends(require_manager_or_admin)],
 )
 async def reject_attestation_endpoint(
-    server_id: str, attestation_id: str, payload: AttestationRejectRequest
+    server_id: str,
+    attestation_id: str,
+    payload: AttestationRejectRequest,
+    current_user: dict = Depends(require_manager_or_admin),
 ) -> ServerAttestationResponse:
     """Reject a PENDING attestation. A reason is mandatory."""
     return ServerAttestationResponse(
-        **await reject_attestation(server_id, attestation_id, payload.rejection_reason)
+        **await reject_attestation(
+            server_id,
+            attestation_id,
+            payload.rejection_reason,
+            actor_id=str(current_user["id"]),
+        )
     )
 
 
@@ -391,11 +411,17 @@ async def reject_attestation_endpoint(
     dependencies=[Depends(require_manager_or_admin)],
 )
 async def supersede_attestation_endpoint(
-    server_id: str, attestation_id: str, payload: AttestationSupersedeRequest
+    server_id: str,
+    attestation_id: str,
+    payload: AttestationSupersedeRequest,
+    current_user: dict = Depends(require_manager_or_admin),
 ) -> ServerAttestationResponse:
     """Mark an attestation as replaced. The record is kept for history."""
     return ServerAttestationResponse(
         **await supersede_attestation(
-            server_id, attestation_id, payload.superseded_by_id
+            server_id,
+            attestation_id,
+            payload.superseded_by_id,
+            actor_id=str(current_user["id"]),
         )
     )

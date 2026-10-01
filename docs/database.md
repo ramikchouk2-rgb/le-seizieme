@@ -484,6 +484,83 @@ Règles configurables des primes.
 | created_at | TIMESTAMP | Date de création |
 | updated_at | TIMESTAMP | Date de modification |
 
+## audit_log — journal d'audit
+
+**Étape 24C-D-7.** Le journal enregistre les actions administratives. Il existe
+une seule table, `audit_log`, alimentée par `app/services/audit_service.py` via
+`log_audit_action(conn, actor_id, action, detail, target_id)`.
+
+### Actions
+
+`action` est une énumération `admin_audit_action`.
+
+| Valeur | Signification |
+|--------|---------------|
+| `USER_CREATED` | Création d'un utilisateur |
+| `USER_UPDATED` | Modification d'un utilisateur |
+| `USER_DEACTIVATED` | Désactivation d'un utilisateur |
+| `PROFILE_PHOTO_UPLOADED` | Ajout **ou remplacement** d'une photo de profil |
+| `PROFILE_PHOTO_DELETED` | Suppression d'une photo de profil |
+| `ATTESTATION_UPLOADED` | Dépôt d'un document d'attestation (toujours `PENDING`) |
+| `ATTESTATION_VERIFIED` | Vérification explicite d'une attestation |
+| `ATTESTATION_REJECTED` | Rejet d'une attestation |
+| `ATTESTATION_SUPERSEDED` | Remplacement d'une attestation |
+
+**Un seul évènement pour l'ajout et le remplacement d'une photo.** Il n'existe pas
+d'action `REPLACED` : les deux opérations sont la même action perçue par
+l'utilisateur, et la différence est portée par `detail->>'replaced'`
+(`true` si une photo courante existait déjà). Aucun marqueur ne peut ainsi
+diverger de l'autre.
+
+Migration : `database/migrations/20261003_server_file_audit_actions.sql`
+(idempotente, `ADD VALUE IF NOT EXISTS`).
+
+### Acteur et cible
+
+Une action porte sur un serveur n'est pas une action sur un utilisateur. Or
+`target_user_id` est une clé étrangère vers `users(id)` : y écrire un
+identifiant de serveur échouerait. **Pour les six actions serveur,
+`target_user_id` reste donc `NULL`.**
+
+| Élément | Rôle |
+|---------|------|
+| `actor_user_id` | Le MANAGER ou ADMIN authentifié qui a effectué l'action. Jamais lu dans le corps de la requête. |
+| `detail->>'server_id'` | Le serveur concerné |
+| `target_user_id` | `NULL` pour les actions serveur ; l'utilisateur concerné pour `USER_*` |
+
+Il n'existe pas de colonne `target_server_id` : le serveur est déjà identifiable
+dans le détail JSONB, et aucune nouvelle cible n'était nécessaire.
+
+### Contenu du détail : métadonnées uniquement
+
+Le détail est construit par **liste blanche explicite**, champ par champ. Il ne
+contient jamais :
+
+- les octets du document (`BYTEA`) ni l'objet fichier ;
+- de coordonnées GPS ni aucune donnée de localisation ;
+- de mot de passe, hash, jeton ou identifiant d'authentification ;
+- d'URL publique, signée ou d pertain de stockage.
+
+Champs journalisés pour une photo : `server_id`, `file_id`, `mime_type`,
+`file_size`, `replaced`. Pour un dépôt d'attestation : `server_id`,
+`attestation_id`, `file_id`, `qualification_name`, `mime_type`, `file_size`,
+`status`. Pour une transition : `server_id`, `attestation_id`, `old_status`,
+`new_status`, `qualification_name`, puis `verified_by` / `verified_at`,
+`rejection_reason` ou `superseded_by_id` selon le cas.
+
+La sanitisation appliquée à l'affichage du journal (redaction des clés sensibles,
+profondeur bornée) est une protection **d'affichage** ; la garantie réelle est la
+liste blanche côté serveur.
+
+### Atomicité
+
+L'écriture d'audit partage la **transaction de la mutation**. Une opération qui
+échoue — donc une transaction annulée — ne laisse donc **aucun** enregistrement :
+un journal ne peut pas annoncer la suppression d'une photo ou la vérification
+d'une attestation qui n'ont pas eu lieu. La suppression de photo de profil a été
+rendue transactionnelle pour cette raison ; elle utilisait auparavant un `UPDATE`
+autocommité.
+
 ## Relations principales
 
 ```

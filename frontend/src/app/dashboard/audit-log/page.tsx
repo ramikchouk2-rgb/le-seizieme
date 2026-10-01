@@ -73,7 +73,8 @@ export default function AuditLogPage() {
       <main className="p-8">
         <div className="max-w-7xl mx-auto">
           <p className="text-gray-600 mb-6">
-            Consultez l'historique des actions administratives (création, modification, désactivation d'utilisateurs).
+            Consultez l'historique des actions administratives : gestion des
+            utilisateurs, photos de profil et attestations professionnelles.
           </p>
 
           <AuditLogFiltersPanel

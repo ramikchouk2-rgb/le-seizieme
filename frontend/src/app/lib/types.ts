@@ -524,7 +524,15 @@ export interface DeactivateResponse {
 export type AuditLogAction =
   | 'USER_CREATED'
   | 'USER_UPDATED'
-  | 'USER_DEACTIVATED';
+  | 'USER_DEACTIVATED'
+  // Step 24C-D-7: server-file and attestation administration. These keep
+  // target_user_id NULL and identify the server through detail.server_id.
+  | 'PROFILE_PHOTO_UPLOADED'
+  | 'PROFILE_PHOTO_DELETED'
+  | 'ATTESTATION_UPLOADED'
+  | 'ATTESTATION_VERIFIED'
+  | 'ATTESTATION_REJECTED'
+  | 'ATTESTATION_SUPERSEDED';
 
 export interface AuditLogItem {
   id: string;
@@ -557,4 +565,10 @@ export const AUDIT_LOG_ACTION_OPTIONS: { value: AuditLogAction; label: string }[
   { value: 'USER_CREATED', label: 'Utilisateur créé' },
   { value: 'USER_UPDATED', label: 'Utilisateur mis à jour' },
   { value: 'USER_DEACTIVATED', label: 'Utilisateur désactivé' },
+  { value: 'PROFILE_PHOTO_UPLOADED', label: 'Photo de profil ajoutée' },
+  { value: 'PROFILE_PHOTO_DELETED', label: 'Photo de profil supprimée' },
+  { value: 'ATTESTATION_UPLOADED', label: 'Attestation ajoutée' },
+  { value: 'ATTESTATION_VERIFIED', label: 'Attestation vérifiée' },
+  { value: 'ATTESTATION_REJECTED', label: 'Attestation rejetée' },
+  { value: 'ATTESTATION_SUPERSEDED', label: 'Attestation remplacée' },
 ];

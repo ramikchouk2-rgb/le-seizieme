@@ -12,12 +12,25 @@ function ActionBadge({ action }: { action: string }) {
     USER_CREATED: 'bg-green-50 text-green-700 border-green-200',
     USER_UPDATED: 'bg-blue-50 text-blue-700 border-blue-200',
     USER_DEACTIVATED: 'bg-red-50 text-red-700 border-red-200',
+    // Step 24C-D-7: server-file and attestation actions.
+    PROFILE_PHOTO_UPLOADED: 'bg-teal-50 text-teal-700 border-teal-200',
+    PROFILE_PHOTO_DELETED: 'bg-orange-50 text-orange-700 border-orange-200',
+    ATTESTATION_UPLOADED: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+    ATTESTATION_VERIFIED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    ATTESTATION_REJECTED: 'bg-red-50 text-red-700 border-red-200',
+    ATTESTATION_SUPERSEDED: 'bg-gray-100 text-gray-600 border-gray-300',
   };
 
   const labels: Record<string, string> = {
     USER_CREATED: 'Utilisateur créé',
     USER_UPDATED: 'Utilisateur mis à jour',
     USER_DEACTIVATED: 'Utilisateur désactivé',
+    PROFILE_PHOTO_UPLOADED: 'Photo de profil ajoutée',
+    PROFILE_PHOTO_DELETED: 'Photo de profil supprimée',
+    ATTESTATION_UPLOADED: 'Attestation ajoutée',
+    ATTESTATION_VERIFIED: 'Attestation vérifiée',
+    ATTESTATION_REJECTED: 'Attestation rejetée',
+    ATTESTATION_SUPERSEDED: 'Attestation remplacée',
   };
 
   return (
@@ -31,8 +44,24 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-function formatDateTime(value?: string | null) {
-  if (!value) return '—';
+/**
+ * Step 24C-D-7: server actions keep target_user_id NULL -- audit_log's
+ * target_user_id is a foreign key onto users(id), so a server id cannot go
+ * there. The server is identified by detail.server_id instead. Only the server
+ * id is shown; no server personal data is pulled into the audit table.
+ */
+function formatTarget(item: AuditLogItem): string {
+  if (item.target_email || item.target_user_id) {
+    return item.target_email || item.target_user_id || '—';
+  }
+  const serverId = item.detail?.server_id;
+  if (typeof serverId === 'string' && serverId) {
+    return `Serveur ${serverId}`;
+  }
+  return '—';
+}
+
+function formatDateTime(value?: string | null) {  if (!value) return '—';
   const date = new Date(value.endsWith('Z') ? value : `${value}Z`);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString('fr-FR', {
@@ -98,7 +127,7 @@ export default function AuditLogTable({ items, onDrawerOpen }: AuditLogTableProp
                     {item.actor_email || item.actor_user_id || '—'}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
-                    {item.target_email || item.target_user_id || '—'}
+                    {formatTarget(item)}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
                     {formatDetail(item.detail)}
@@ -142,7 +171,7 @@ export default function AuditLogTable({ items, onDrawerOpen }: AuditLogTableProp
               </div>
               <div>
                 <span className="font-medium">Cible: </span>
-                {item.target_email || item.target_user_id || '—'}
+                {formatTarget(item)}
               </div>
             </div>
             <div className="pt-3 border-t border-gray-100">

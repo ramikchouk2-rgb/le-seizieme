@@ -31,11 +31,20 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from app.core.database import get_pool
+from app.services.audit_service import log_audit_action
 from app.services.server_file_service import (
     ATTESTATION_FILE_TYPE,
     ensure_server_exists,
     store_server_file,
 )
+
+# Step 24C-D-7: audit actions for attestation administration. Each is written
+# inside the same transaction as the lifecycle change it describes, with an
+# explicit metadata whitelist.
+AUDIT_ATTESTATION_UPLOADED = "ATTESTATION_UPLOADED"
+AUDIT_ATTESTATION_VERIFIED = "ATTESTATION_VERIFIED"
+AUDIT_ATTESTATION_REJECTED = "ATTESTATION_REJECTED"
+AUDIT_ATTESTATION_SUPERSEDED = "ATTESTATION_SUPERSEDED"
 
 STATUS_PENDING = "PENDING"
 STATUS_VERIFIED = "VERIFIED"
@@ -137,11 +146,16 @@ async def create_attestation(
     issuing_organization: str | None = None,
     issued_on: date | None = None,
     expires_on: date | None = None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     """Upload a document and create its PENDING attestation record.
 
     The record is ALWAYS created as PENDING. There is no parameter, flag or code
     path that can make an upload produce a verified qualification.
+
+    Step 24C-D-7: when `actor_id` is given, an ATTESTATION_UPLOADED audit row is
+    written inside the same transaction as the document and the attestation row,
+    so a failed upload leaves neither a stray document nor a stray audit record.
     """
     name = (qualification_name or "").strip()
     if not name:
@@ -185,6 +199,26 @@ async def create_attestation(
                 expires_on,
             )
             attestation_id = str(row["id"])
+
+            if actor_id:
+                # Explicit whitelist: no document bytes, no location, no
+                # credentials. The document's own metadata is read back from the
+                # file metadata returned by store_server_file.
+                await log_audit_action(
+                    conn,
+                    actor_id,
+                    AUDIT_ATTESTATION_UPLOADED,
+                    {
+                        "server_id": str(server_id),
+                        "attestation_id": attestation_id,
+                        "file_id": str(file_metadata["id"]),
+                        "qualification_name": name,
+                        "mime_type": str(file_metadata["mime_type"]),
+                        "file_size": int(file_metadata["file_size"]),
+                        "status": STATUS_PENDING,
+                    },
+                    target_id=None,
+                )
 
             created = await conn.fetchrow(
                 f"""
@@ -296,12 +330,17 @@ async def _apply_transition(
     verified_by: str | None = None,
     rejection_reason: str | None = None,
     superseded_by_id: str | None = None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     """Perform one lifecycle transition, transactionally.
 
     The current status is read and the transition legality checked inside the
     same transaction that performs the UPDATE, so two concurrent requests cannot
     both drive a record out of PENDING.
+
+    Step 24C-D-7: the audit row is written in that same transaction, so a
+    rejected transition -- which raises and rolls the whole thing back -- can
+    never leave an audit record claiming a status change that did not happen.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -410,20 +449,91 @@ async def _apply_transition(
                 )
 
             updated = await _fetch_one(conn, server_id, attestation_id)
+
+            if actor_id:
+                await _log_transition_audit(
+                    conn,
+                    actor_id=actor_id,
+                    updated=updated,
+                    old_status=current_status,
+                    new_status=target_status,
+                    rejection_reason=rejection_reason,
+                    superseded_by_id=superseded_by_id,
+                )
     return _serialize(updated)
 
 
+async def _log_transition_audit(
+    conn,
+    *,
+    actor_id: str,
+    updated: dict[str, Any],
+    old_status: str,
+    new_status: str,
+    rejection_reason: str | None,
+    superseded_by_id: str | None,
+) -> None:
+    """Write the audit row for one lifecycle transition.
+
+    `updated` is the post-transition metadata projection. Fields are copied one by
+    one rather than splatted, so no document bytes or unexpected columns can
+    reach the JSONB detail.
+    """
+    if new_status == STATUS_VERIFIED:
+        action = AUDIT_ATTESTATION_VERIFIED
+    elif new_status == STATUS_REJECTED:
+        action = AUDIT_ATTESTATION_REJECTED
+    else:
+        action = AUDIT_ATTESTATION_SUPERSEDED
+
+    detail: dict[str, Any] = {
+        "server_id": str(updated["server_id"]),
+        "attestation_id": str(updated["id"]),
+        "old_status": old_status,
+        "new_status": new_status,
+        "qualification_name": updated["qualification_name"],
+    }
+
+    if new_status == STATUS_VERIFIED:
+        # The actor is already audit.actor_user_id; verified_by mirrors the
+        # attestation record so the two can be compared.
+        detail["verified_by"] = (
+            str(updated["verified_by"]) if updated["verified_by"] else None
+        )
+        detail["verified_at"] = _iso(updated["verified_at"])
+    elif new_status == STATUS_REJECTED:
+        # Only the explicit reason the caller supplied; never the whole payload.
+        detail["rejection_reason"] = rejection_reason
+    else:
+        detail["superseded_by_id"] = (
+            str(updated["superseded_by_id"]) if updated["superseded_by_id"] else None
+        )
+
+    await log_audit_action(conn, actor_id, action, detail, target_id=None)
+
+
 async def verify_attestation(
-    server_id: str, attestation_id: str, verified_by: str
+    server_id: str, attestation_id: str, verified_by: str, actor_id: str | None = None
 ) -> dict[str, Any]:
-    """Explicitly verify a PENDING attestation on behalf of a Manager/Admin."""
+    """Explicitly verify a PENDING attestation on behalf of a Manager/Admin.
+
+    `verified_by` is the authenticated actor and is also what lands in
+    audit.actor_user_id, so both agree.
+    """
     return await _apply_transition(
-        server_id, attestation_id, STATUS_VERIFIED, verified_by=verified_by
+        server_id,
+        attestation_id,
+        STATUS_VERIFIED,
+        verified_by=verified_by,
+        actor_id=actor_id if actor_id is not None else verified_by,
     )
 
 
 async def reject_attestation(
-    server_id: str, attestation_id: str, rejection_reason: str
+    server_id: str,
+    attestation_id: str,
+    rejection_reason: str,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     """Reject a PENDING attestation. A non-blank reason is mandatory."""
     reason = (rejection_reason or "").strip()
@@ -437,11 +547,15 @@ async def reject_attestation(
         attestation_id,
         STATUS_REJECTED,
         rejection_reason=reason,
+        actor_id=actor_id,
     )
 
 
 async def supersede_attestation(
-    server_id: str, attestation_id: str, superseded_by_id: str | None = None
+    server_id: str,
+    attestation_id: str,
+    superseded_by_id: str | None = None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     """Mark an attestation as replaced by a newer document.
 
@@ -461,6 +575,7 @@ async def supersede_attestation(
         attestation_id,
         STATUS_SUPERSEDED,
         superseded_by_id=superseded_by_id,
+        actor_id=actor_id,
     )
 
 

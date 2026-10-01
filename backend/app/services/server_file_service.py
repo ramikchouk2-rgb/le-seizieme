@@ -1,4 +1,7 @@
 """Step 24C-D-5: reusable server file storage service.
+Step 24C-D-7: administrative photo actions are written to the existing audit log
+inside the same transaction as the change, with an explicit metadata whitelist so
+no bytes, location data or credential can ever reach the detail JSON.
 
 Design constraints enforced here:
 
@@ -25,6 +28,13 @@ from fastapi import HTTPException, status
 
 from app.core.database import get_pool
 from app.core.config import settings
+from app.services.audit_service import log_audit_action
+
+# Step 24C-D-7: audit actions for server-file administration. An upload that
+# replaces an existing photo is still PROFILE_PHOTO_UPLOADED; the difference is
+# carried by detail["replaced"] so the action list cannot drift.
+AUDIT_PROFILE_PHOTO_UPLOADED = "PROFILE_PHOTO_UPLOADED"
+AUDIT_PROFILE_PHOTO_DELETED = "PROFILE_PHOTO_DELETED"
 
 # Image types accepted for a profile photo. Kept as an explicit allowlist; a
 # new type is a deliberate code change, never a configuration side effect.
@@ -450,20 +460,39 @@ async def upload_profile_photo(
     data: bytes,
     declared_mime_type: str | None,
     original_filename: str | None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     """Upload or replace the current profile photo.
 
     Replacement deactivates the previous current file instead of deleting it, so
     history is preserved. The insert and the deactivation happen in one
-    transaction, and a partial UNIQUE index on (server_id, file_type)
-    WHERE is_current guarantees at most one current file even under concurrent
-    uploads.
+    transaction, and the partial UNIQUE index on (server_id, file_type) scoped to
+    file_type = 'PROFILE_PHOTO' WHERE is_current guarantees at most one current
+    photo even under concurrent uploads.
+
+    Step 24C-D-7: when `actor_id` is given, a PROFILE_PHOTO_UPLOADED audit row is
+    written INSIDE the same transaction, so a rolled-back upload can never leave a
+    misleading record behind. Whether the upload replaced an existing photo is
+    captured as `replaced` rather than as a separate action.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             await ensure_server_exists(conn, server_id)
-            return await store_server_file(
+
+            # Read the prior state before store_server_file deactivates it, so
+            # "replaced" reflects what actually happened.
+            previous = await conn.fetchrow(
+                """
+                SELECT id FROM server_files
+                WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+                """,
+                server_id,
+                PROFILE_PHOTO_FILE_TYPE,
+            )
+            replaced = previous is not None
+
+            metadata = await store_server_file(
                 conn,
                 server_id,
                 PROFILE_PHOTO_FILE_TYPE,
@@ -472,24 +501,67 @@ async def upload_profile_photo(
                 original_filename,
             )
 
+            if actor_id:
+                # Explicit whitelist. `metadata` is already a metadata projection
+                # with no `content` key, but the keys are still named one by one
+                # so a future change to that projection cannot silently start
+                # writing bytes into the audit log.
+                await log_audit_action(
+                    conn,
+                    actor_id,
+                    AUDIT_PROFILE_PHOTO_UPLOADED,
+                    {
+                        "server_id": str(server_id),
+                        "file_id": str(metadata["id"]),
+                        "mime_type": str(metadata["mime_type"]),
+                        "file_size": int(metadata["file_size"]),
+                        "replaced": replaced,
+                    },
+                    target_id=None,
+                )
+            return metadata
 
-async def delete_current_profile_photo(server_id: str) -> bool:
+
+async def delete_current_profile_photo(
+    server_id: str, actor_id: str | None = None
+) -> bool:
     """Deactivate the current profile photo.
 
     Returns True when a photo was removed. The row is retained as history
     (`is_current = FALSE`) rather than hard-deleted, so the operation is
     reversible and audit-friendly.
+
+    Step 24C-D-7: the deactivation and its PROFILE_PHOTO_DELETED audit row now
+    share ONE explicit transaction. Previously this was a bare autocommitted
+    UPDATE, which would have let an audit row commit independently of the change
+    it described. When there is no current photo the function still returns False
+    and writes no audit row, so a no-op cannot look like a deletion.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            UPDATE server_files
-            SET is_current = FALSE, updated_at = NOW()
-            WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
-            RETURNING id
-            """,
-            server_id,
-            PROFILE_PHOTO_FILE_TYPE,
-        )
-    return len(rows) > 0
+        async with conn.transaction():
+            rows = await conn.fetch(
+                """
+                UPDATE server_files
+                SET is_current = FALSE, updated_at = NOW()
+                WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+                RETURNING id, mime_type, file_size
+                """,
+                server_id,
+                PROFILE_PHOTO_FILE_TYPE,
+            )
+            if rows and actor_id:
+                for row in rows:
+                    await log_audit_action(
+                        conn,
+                        actor_id,
+                        AUDIT_PROFILE_PHOTO_DELETED,
+                        {
+                            "server_id": str(server_id),
+                            "file_id": str(row["id"]),
+                            "mime_type": str(row["mime_type"]),
+                            "file_size": int(row["file_size"]),
+                        },
+                        target_id=None,
+                    )
+            return len(rows) > 0
