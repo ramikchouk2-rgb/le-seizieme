@@ -41,3 +41,473 @@ body {
 .border-gold {
   border-color: var(--gold);
 }
+
+/* ===========================================================================
+   STEP 24C-D-10 — FEUILLE D'OPERATION IMPRIMABLE
+   ---------------------------------------------------------------------------
+   Two halves:
+
+   1. Screen styles. Keep the Le Seizieme gold theme; the sheet is laid out
+      for desktop and tablet with responsive overflow on wide tables.
+   2. @media print styles. Operational black-on-white, A4, with the dashboard
+      chrome and the on-screen controls removed.
+
+   Kept as named classes rather than Tailwind `print:` variants throughout the
+   JSX so the whole print contract can be audited by reading this one file.
+   ========================================================================= */
+
+.print-sheet {
+  /* Screen: give the document a page-like surface. */
+  background: #ffffff;
+}
+
+/* --- screen: print document typography ---------------------------------- */
+
+.print-brand {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: var(--gold-dark);
+}
+
+.print-doc-type {
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #6b7280;
+  margin-top: 0.125rem;
+}
+
+.print-event-name {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #111827;
+  margin-top: 0.5rem;
+  line-height: 1.2;
+}
+
+.print-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.25rem;
+  margin-top: 0.625rem;
+  font-size: 0.8125rem;
+  color: #374151;
+}
+
+.print-urgent {
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+/* --- screen: sections ---------------------------------------------------- */
+
+.print-section-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold-dark);
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.3125rem;
+  margin-bottom: 0.75rem;
+}
+
+.print-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .print-details-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.print-detail-label {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7280;
+}
+
+.print-detail-value {
+  font-size: 0.875rem;
+  color: #111827;
+  margin-top: 0.125rem;
+}
+
+/* --- screen: tables ------------------------------------------------------ */
+
+.print-table-wrap {
+  /* Wide tables scroll on a narrow screen instead of forcing the page wide.
+     The printed sheet never scrolls: `overflow: visible` is forced below. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.print-table th,
+.print-table td {
+  border: 1px solid #e5e7eb;
+  padding: 0.375rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.print-table th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.print-empty {
+  font-size: 0.8125rem;
+  color: #6b7280;
+  font-style: italic;
+}
+
+.print-note {
+  margin-top: 0.5rem;
+  font-size: 0.6875rem;
+  color: #6b7280;
+}
+
+/* --- screen: staff cards ------------------------------------------------- */
+
+.print-staff-list,
+.print-transport-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.print-staff-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.print-staff-head {
+  display: flex;
+  gap: 0.875rem;
+  align-items: flex-start;
+}
+
+.print-staff-name {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.print-staff-role {
+  font-size: 0.8125rem;
+  color: var(--gold-dark);
+  font-weight: 500;
+}
+
+.print-staff-meta {
+  font-size: 0.75rem;
+  color: #4b5563;
+  margin-top: 0.125rem;
+}
+
+.print-staff-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  border-top: 1px solid #f3f4f6;
+  padding-top: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .print-staff-columns {
+    grid-template-columns: 0.8fr 1.2fr 1.2fr;
+  }
+}
+
+.print-staff-block {
+  min-width: 0;
+}
+
+.print-block-title {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+.print-block-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #111827;
+  margin-top: 0.125rem;
+}
+
+.print-block-hint {
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  margin-top: 0.125rem;
+}
+
+.print-skill-list,
+.print-attestation-list {
+  margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  font-size: 0.8125rem;
+  color: #111827;
+}
+
+.print-skill-name {
+  font-weight: 500;
+}
+
+.print-skill-level,
+.print-attestation-date {
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+/* --- screen: photos ------------------------------------------------------ */
+
+.print-photo-img {
+  width: 72px;
+  height: 88px;
+  object-fit: cover;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.25rem;
+  display: block;
+}
+
+.print-photo-placeholder {
+  width: 72px;
+  height: 88px;
+  border: 1px dashed #d1d5db;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0.25rem;
+  font-size: 0.5625rem;
+  line-height: 1.2;
+  color: #9ca3af;
+  background: #f9fafb;
+}
+
+/* --- screen: transport --------------------------------------------------- */
+
+.print-transport-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.print-transport-head,
+.print-transport-route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.8125rem;
+  color: #374151;
+}
+
+.print-transport-driver {
+  font-weight: 700;
+  color: #111827;
+}
+
+.print-passengers-title {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 0.1875rem;
+}
+
+.print-passengers-list {
+  list-style: none;
+  padding-left: 0;
+  font-size: 0.8125rem;
+  color: #111827;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.print-passenger-label,
+.print-passenger-status {
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.print-notes {
+  font-size: 0.8125rem;
+  color: #374151;
+  white-space: pre-wrap;
+}
+
+.print-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 0.5rem;
+  font-size: 0.625rem;
+  color: #9ca3af;
+}
+
+/* ===========================================================================
+   PRINT MEDIA
+   ========================================================================= */
+
+@page {
+  size: A4;
+  margin: 12mm 10mm 14mm;
+}
+
+@media print {
+  /* Screen-only controls: the "Imprimer" and "Retour" toolbar. This MUST stay
+     inside @media print — declared outside it the toolbar would be hidden on
+     screen too, leaving no way to start a print. */
+  .no-print {
+    display: none !important;
+  }
+  /* Dashboard chrome. `<aside>` is the sidebar and `<header>` is the sticky
+     top bar; both are element-selected so no component needs a print-only
+     prop. The print document itself uses <section>/<div>, never <header>, so
+     the sheet title is unaffected. */
+  aside,
+  header {
+    display: none !important;
+  }
+
+  /* Undo the sidebar's width offset, otherwise the sheet is pushed 16rem
+     right and clipped. Class lives on the dashboard layout wrapper. */
+  .dashboard-content-offset {
+    margin-left: 0 !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Remove the layout padding so the sheet uses the @page margins. */
+  main {
+    padding: 0 !important;
+  }
+
+  /* Nothing may clip: a clipped card is a lost operational fact. */
+  main,
+  .print-sheet,
+  .print-sheet * {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Printer-friendly black and white. Brand fills and soft shadows go; borders
+     stay so sections and rows remain separable in mono. */
+  .print-sheet,
+  .print-sheet * {
+    background: transparent !important;
+    box-shadow: none !important;
+    color: #000000 !important;
+    text-shadow: none !important;
+  }
+
+  /* The gold rule under the title is the one piece of colour worth keeping as
+     a printed hairline; render it as black. */
+  .print-sheet-header {
+    border-bottom: 1.5pt solid #000000 !important;
+  }
+
+  .print-event-name {
+    font-size: 16pt !important;
+  }
+
+  .print-section-title {
+    font-size: 10pt !important;
+    border-bottom: 0.5pt solid #000000 !important;
+  }
+
+  /* Compact, legible type. */
+  .print-sheet {
+    font-size: 9pt;
+    line-height: 1.35;
+  }
+
+  .print-table th,
+  .print-table td {
+    border: 0.5pt solid #000000 !important;
+    padding: 3pt 4pt !important;
+    font-size: 8.5pt !important;
+  }
+
+  .print-table th {
+    font-weight: 700 !important;
+    /* Repeat the header on every page of a long table. */
+    display: table-header-group;
+  }
+
+  /* Photos print at a fixed physical size so they cannot balloon. */
+  .print-photo-img {
+    width: 22mm !important;
+    height: 27mm !important;
+  }
+
+  .print-photo-placeholder {
+    width: 22mm !important;
+    height: 27mm !important;
+  }
+
+  /* --- page-break control ------------------------------------------------ */
+
+  /* Keep a staff card or a transport group whole rather than splitting it. */
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Never leave a heading stranded at the foot of a page. */
+  .print-heading {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* Table rows are atomic. */
+  .print-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* The header block stays with the first section. */
+  .print-sheet-header {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* A section title is always followed by at least some of its content. */
+  .print-section-title + * {
+    break-before: avoid;
+    page-break-before: avoid;
+  }
+}

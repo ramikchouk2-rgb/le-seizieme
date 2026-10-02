@@ -21,7 +21,13 @@ export default function DashboardLayout({
         </a>
         <LiveAnnouncer />
         <Sidebar />
-        <div className="ml-64">
+        {/*
+          `dashboard-content-offset` is a print-only hook: `@media print` in
+          globals.css sets its margin-left to 0 so the printable sheet is not
+          pushed right by the (hidden) sidebar. `ml-64` still controls the
+          screen layout. Step 24C-D-10.
+        */}
+        <div className="ml-64 dashboard-content-offset">
           <Header />
           <main id="main-content" className="p-8">
             {children}

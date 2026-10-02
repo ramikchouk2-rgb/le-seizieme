@@ -20,6 +20,7 @@ import {
   checkOutStaff,
   updateAttendanceStatus,
   getAttendanceSummary,
+  getEventPrintData,
   getEventReport,
   getEventEvaluations,
   createEvaluation,
@@ -161,6 +162,27 @@ export function useEventReport(eventId: string) {
     queryKey: ['eventReport', eventId],
     queryFn: () => getEventReport(eventId),
     enabled: !!eventId,
+  });
+}
+
+/**
+ * Step 24C-D-10: the single data source for the printable operational sheet.
+ *
+ * Deliberately separate from `useEventDetail` and cached under its own key, so
+ * opening the print page never reuses -- and can never silently inherit -- the
+ * richer event-detail payload. The print sheet is built only from the
+ * print-data contract.
+ *
+ * `staleTime` is raised because a printed sheet is a snapshot: refetching it
+ * mid-print because the window regained focus would be surprising, and the
+ * query provider already disables focus refetching globally.
+ */
+export function useEventPrintData(eventId: string) {
+  return useQuery({
+    queryKey: ['eventPrintData', eventId],
+    queryFn: () => getEventPrintData(eventId),
+    enabled: !!eventId,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

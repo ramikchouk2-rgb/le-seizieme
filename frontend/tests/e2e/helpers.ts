@@ -29,8 +29,11 @@ export async function createTestEvent(page: Page, suffix: string = ''): Promise<
   await page.getByLabel('Client *').fill('E2E Test Client');
   await page.getByLabel('Ville *').selectOption({ index: 1 });
   await page.getByLabel('Adresse *').fill('123 E2E Test Street');
-  await page.getByLabel('Date de début *').fill('2025-12-31T20:00');
-  await page.getByLabel('Date de fin *').fill('2025-12-31T23:00');
+  // EventForm labels these "Date et heure de début/fin *"; the old
+  // "Date de début *" labels no longer exist and made every spec using this
+  // helper time out.
+  await page.getByLabel('Date et heure de début *').fill('2025-12-31T20:00');
+  await page.getByLabel('Date et heure de fin *').fill('2025-12-31T23:00');
   await page.getByLabel('Nombre d\'invités *').fill('50');
   await page.getByLabel('Type d\'événement *').fill('E2E Test Type');
   await page.getByRole('button', { name: 'Créer l\'événement' }).click();

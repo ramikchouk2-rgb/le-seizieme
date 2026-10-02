@@ -202,6 +202,33 @@ export default function EventDetailPage() {
             >
               Rapport
             </Link>
+            {/*
+              Step 24C-D-10. Navigates to the dedicated print page; it does NOT
+              call window.print() here. Printing needs the print-data sheet to be
+              loaded and laid out first, so the trigger lives on that page only.
+              Styled as a gold action so it reads as a button, not a fifth tab.
+            */}
+            <Link
+              href={`/dashboard/events/${eventId}/print`}
+              data-testid="event-print-link"
+              className="flex-1 inline-flex items-center justify-center gap-2 text-center px-4 py-2 text-sm font-medium rounded-lg bg-[#D4AF37] text-white hover:bg-[#B8941E] transition-colors"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6v-8z"
+                />
+              </svg>
+              Imprimer
+            </Link>
           </nav>
 
           {statusMessage && (

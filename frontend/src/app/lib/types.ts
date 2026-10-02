@@ -604,6 +604,176 @@ export type AuditLogFilters = {
   created_before: string;
 };
 
+/* ---------------------------------------------------------------------------
+ * Step 24C-D-10: event print-data contract.
+ *
+ * A faithful mirror of `EventPrintDataResponse` returned by
+ * `GET /api/events/{event_id}/print-data` (Step 24C-D-8B). These types exist so
+ * the print page consumes that ONE dedicated endpoint. Nothing here is
+ * reconstructed from the event-detail, staffing or transport endpoints.
+ *
+ * PRIVACY. Two fields in this contract must never reach the rendered sheet:
+ *   - `EventPrintEventResponse.latitude` / `.longitude`
+ *   - `EventPrintTransportGroupResponse.estimated_route_distance_km` is fine,
+ *     but the raw `departure_latitude` / `pickup_latitude` values are NOT part
+ *     of this contract at all: the backend never returns them, because they are
+ *     internal route data, not printable facts.
+ * They are declared here only so the type matches the response exactly. The
+ * print view renders a venue by ADDRESS and CITY only; no coordinate is ever
+ * displayed. See `print/page.tsx`.
+ * ------------------------------------------------------------------------ */
+
+/** A real `server_skills` row: the server's real capability for a skill. */
+export interface EventPrintActualSkillResponse {
+  skill_id: string;
+  skill_name: string;
+  level: number;
+  years_experience: number;
+}
+
+/**
+ * VERIFIED attestation metadata only.
+ *
+ * The backend filters on VERIFIED, so `status` is always 'VERIFIED'. A PENDING
+ * or REJECTED document is a document that has NOT been verified and must never
+ * be presented on an operational sheet as a qualification.
+ *
+ * Deliberately no file path, no storage key, no URL, no document bytes.
+ */
+export interface EventPrintVerifiedAttestationResponse {
+  attestation_id: string;
+  qualification_name: string;
+  status: string;
+  verified_at?: string | null;
+}
+
+/** One staffing requirement: what the event NEEDS. */
+export interface EventPrintRequirementResponse {
+  requirement_id: string;
+  role_name: string;
+  quantity: number;
+  required_gender?: string | null;
+  minimum_experience: number;
+  /**
+   * A bare numeric THRESHOLD, named for what it is.
+   *
+   * `event_requirements` has no `skill_id`, so no skill identity can be
+   * attached to this value and none is inferred from `role_name`. It is a
+   * requirement and must never be presented as the server's own level -- that
+   * is `EventPrintAssignmentResponse.actual_skills`.
+   */
+  required_minimum_skill_level: number;
+  selected: number;
+  missing: number;
+}
+
+/** One assigned server: the actual team for this event. */
+export interface EventPrintAssignmentResponse {
+  server_id: string;
+  first_name: string;
+  last_name: string;
+  gender?: string | null;
+  city?: string | null;
+  years_experience?: number | null;
+  role: string;
+  assignment_status: string;
+  assigned_at?: string | null;
+  confirmed_at?: string | null;
+  /**
+   * The requirement minimum this assignment was matched against, repeated per
+   * row so a printed line is self-contained.
+   *
+   * A REQUIREMENT, not a capability: never render this as the server's actual
+   * skill level. Compare `actual_skills` on the same object.
+   */
+  required_minimum_skill_level: number;
+  /**
+   * Always null in practice: no selection score is persisted on an assignment,
+   * and recomputing one here would invent data for a printed sheet.
+   */
+  score?: number | null;
+  /** Step 24C-D-9. Null means the size was never recorded. */
+  uniform_size?: ServerUniformSize | null;
+  /**
+   * A boolean ONLY. There is no public photo URL and none is invented: the
+   * bytes are fetched from the existing authenticated endpoint on demand.
+   */
+  profile_photo_available: boolean;
+  actual_skills: EventPrintActualSkillResponse[];
+  verified_attestations: EventPrintVerifiedAttestationResponse[];
+}
+
+/** Event and venue facts for the sheet header. */
+export interface EventPrintEventResponse {
+  id: string;
+  name: string;
+  client_name?: string | null;
+  event_type?: string | null;
+  start_datetime?: string | null;
+  end_datetime?: string | null;
+  city?: string | null;
+  address?: string | null;
+  /**
+   * Resolved VENUE coordinates.
+   *
+   * INTERNAL LOCATION DATA -- NEVER RENDERED. Declared for contract accuracy
+   * only. The print view shows the venue by address and city.
+   */
+  latitude?: number | null;
+  /** INTERNAL LOCATION DATA -- NEVER RENDERED. See `latitude`. */
+  longitude?: number | null;
+  guest_count?: number | null;
+  status: string;
+  priority?: string | null;
+  urgent: boolean;
+  /**
+   * The RELATIVE response budget only. The backend computes no absolute
+   * deadline, so none is displayed and none is invented here.
+   */
+  required_response_minutes?: number | null;
+  notes?: string | null;
+  /** Whether the venue coordinates above are the event's exact ones. */
+  has_exact_location: boolean;
+}
+
+/** One confirmed transport group. */
+export interface EventPrintPassengerResponse {
+  server_id: string;
+  name: string;
+  pickup_order: number;
+  pickup_status: string;
+  /** Human-readable label. The raw coordinate is never part of this contract. */
+  pickup_location_label: string;
+}
+
+/** A driver and their passengers. Cancelled groups are excluded by the backend. */
+export interface EventPrintTransportGroupResponse {
+  transport_group_id: string;
+  driver_server_id: string;
+  driver_name: string;
+  vehicle: string;
+  vehicle_type?: string | null;
+  capacity: number;
+  passenger_count: number;
+  departure_time?: string | null;
+  departure_location_label: string;
+  destination_label: string;
+  estimated_duration_minutes?: number | null;
+  estimated_distance_km?: number | null;
+  estimated_route_distance_km?: number | null;
+  has_exact_location: boolean;
+  status: string;
+  passengers: EventPrintPassengerResponse[];
+}
+
+/** The complete print-data payload for one event. */
+export interface EventPrintDataResponse {
+  event: EventPrintEventResponse;
+  requirements: EventPrintRequirementResponse[];
+  assignments: EventPrintAssignmentResponse[];
+  transport_groups: EventPrintTransportGroupResponse[];
+}
+
 export const AUDIT_LOG_ACTION_OPTIONS: { value: AuditLogAction; label: string }[] = [
   { value: 'USER_CREATED', label: 'Utilisateur créé' },
   { value: 'USER_UPDATED', label: 'Utilisateur mis à jour' },

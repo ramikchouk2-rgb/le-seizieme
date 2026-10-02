@@ -24,6 +24,14 @@ import type {
   ServerAttestationList,
   ServerAttestationStatus,
   ServerAttestationUploadMetadata,
+  EventPrintDataResponse,
+  EventPrintEventResponse,
+  EventPrintRequirementResponse,
+  EventPrintAssignmentResponse,
+  EventPrintActualSkillResponse,
+  EventPrintVerifiedAttestationResponse,
+  EventPrintTransportGroupResponse,
+  EventPrintPassengerResponse,
 } from '@/app/lib/types';
 
 export type {
@@ -50,6 +58,16 @@ export type {
   AuditLogItem,
   AuditLogListResponse,
   AuditLogFilters,
+  // Step 24C-D-10: the print-data contract, re-exported so the print page has a
+  // single import site, exactly like every other shared type here.
+  EventPrintDataResponse,
+  EventPrintEventResponse,
+  EventPrintRequirementResponse,
+  EventPrintAssignmentResponse,
+  EventPrintActualSkillResponse,
+  EventPrintVerifiedAttestationResponse,
+  EventPrintTransportGroupResponse,
+  EventPrintPassengerResponse,
 } from '@/app/lib/types';
 export type { LoginResponse, UserResponse } from '@/app/lib/api-client';
 export { ApiError } from '@/app/lib/api-client';
@@ -1528,6 +1546,27 @@ export async function getAttendanceSummary(eventId: string): Promise<AttendanceS
 
 export async function getEventReport(eventId: string): Promise<EventReportResponse> {
   return fetchAPI<EventReportResponse>(`/events/${eventId}/report`);
+}
+
+/**
+ * Step 24C-D-10: the ONE data source for the printable operational sheet.
+ *
+ * Calls `GET /events/{eventId}/print-data` (Step 24C-D-8B) and returns the
+ * whole `EventPrintDataResponse`. The print page deliberately uses only this
+ * endpoint: it must not reassemble a sheet out of the event-detail, staffing,
+ * transport and server APIs, because that would silently diverge from the
+ * privacy rules the print contract already enforces (no server GPS, no
+ * attestation documents, verified-only attestations).
+ *
+ * Authentication, error handling and the 401 redirect are inherited from
+ * `fetchAPI`, so this behaves exactly like `getEventReport` next to it.
+ *
+ * Unlike `getEventDetail`, a 404 is NOT swallowed into `null`: the print page
+ * needs to tell "no such event" apart from "loaded", because a missing event is
+ * an error state with a retry, not an empty sheet.
+ */
+export async function getEventPrintData(eventId: string): Promise<EventPrintDataResponse> {
+  return fetchAPI<EventPrintDataResponse>(`/events/${eventId}/print-data`);
 }
 
 export async function getEventEvaluations(eventId: string): Promise<EvaluationResponse[]> {
