@@ -93,6 +93,96 @@ async def get_event_scheduling_conflict(
     }
 
 
+async def load_event_scheduling_conflicts(
+    conn,
+    server_ids: list[str],
+    event_start: datetime,
+    event_end: datetime,
+    exclude_event_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Bulk form of `get_event_scheduling_conflict`, keyed by server_id.
+
+    Step 24C-D-8A. The per-server version costs one or two queries per assigned
+    server; this resolves the same two questions for every server in two queries
+    total, using the repository's established `= ANY($1::uuid[])` pattern.
+
+    Semantics are identical to the per-server function, including the window
+    test (`start_datetime <= event_start AND end_datetime >= event_end`, i.e. the
+    availability window must fully cover the event) and the conflict message
+    wording, so no conflict detection is weakened.
+
+    Every requested server gets an entry. No server coordinates are read or
+    returned: availability is a time-range question only.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    if not server_ids:
+        return result
+
+    event_start = _naive_utc(event_start)
+    event_end = _naive_utc(event_end)
+
+    # Question 1: does an AVAILABLE window fully cover the event?
+    covered = await conn.fetch(
+        """
+        SELECT DISTINCT server_id
+        FROM server_availability
+        WHERE server_id = ANY($1::uuid[])
+          AND start_datetime <= $2
+          AND end_datetime >= $3
+          AND status = 'AVAILABLE'
+        """,
+        server_ids,
+        event_start,
+        event_end,
+    )
+    covered_ids = {str(r["server_id"]) for r in covered}
+
+    # Question 2: for the servers that are covered, does another CONFIRMED event
+    # overlap? DISTINCT ON keeps the earliest such event per server, which is
+    # what the per-server query returned with ORDER BY ... LIMIT 1.
+    overlap_rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (es.server_id)
+               es.server_id, e.name, e.start_datetime
+        FROM event_staff es
+        JOIN events e ON e.id = es.event_id
+        WHERE es.server_id = ANY($1::uuid[])
+          AND es.assignment_status = 'CONFIRMED'
+          AND e.status IN ('CONFIRMED', 'IN_PROGRESS')
+          AND e.start_datetime < $3
+          AND e.end_datetime > $2
+          AND ($4::uuid IS NULL OR e.id <> $4::uuid)
+        ORDER BY es.server_id, e.start_datetime ASC
+        """,
+        server_ids,
+        event_start,
+        event_end,
+        exclude_event_id,
+    )
+    overlaps = {str(r["server_id"]): r for r in overlap_rows}
+
+    for server_id in server_ids:
+        key = str(server_id)
+        if key not in covered_ids:
+            result[key] = {
+                "conflict": True,
+                "conflict_reason": "Aucune disponibilité disponible ne couvre cet événement.",
+            }
+            continue
+        overlap = overlaps.get(key)
+        if overlap is None:
+            result[key] = {"conflict": False, "conflict_reason": None}
+            continue
+        result[key] = {
+            "conflict": True,
+            "conflict_reason": (
+                f"Conflit avec l'événement « {overlap['name']} » "
+                f"({overlap['start_datetime'].strftime('%d/%m/%Y %H:%M')})."
+            ),
+        }
+    return result
+
+
 async def get_availability_scheduling_conflict(
     conn,
     server_id: str,

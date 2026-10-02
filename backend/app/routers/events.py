@@ -63,6 +63,7 @@ from app.services.event_service import (
     get_event_staff_summary,
     load_cities,
     load_event_list,
+    load_event_requirements,
     load_event_stats,
     remove_staff_assignment,
     update_event,
@@ -310,12 +311,14 @@ async def get_event_detail(event_id: str) -> EventDetailResponse:
 
 @router.get("/events/{event_id}/requirements", response_model=EventRequirementsResponse, dependencies=[Depends(get_current_user_dep)])
 async def get_requirements(event_id: str) -> EventRequirementsResponse:
-    data = await get_event_staff_summary(event_id)
-    if "error" in data:
-        raise HTTPException(status_code=404, detail=data["error"])
+    # Step 24C-D-8A: requirements only. This no longer runs the staff, conflict
+    # or transport queries that the endpoint used to execute and discard.
+    rows = await load_event_requirements(event_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Event not found")
     return EventRequirementsResponse(
         event_id=event_id,
-        requirements=[EventRequirementDetailResponse(**r) for r in data.get("requirements", [])],
+        requirements=[EventRequirementDetailResponse(**r) for r in rows],
     )
 
 

@@ -10,6 +10,7 @@ from app.utils.selection_utils import compute_candidate_score
 from app.services.availability_service import (
     get_availability_scheduling_conflict,
     get_event_scheduling_conflict,
+    load_event_scheduling_conflicts,
 )
 from app.services.selection_engine import normalize_text, serialize_row
 from app.utils.selection_utils import route_distance_km
@@ -49,83 +50,200 @@ async def load_event_detail(event_id: str) -> dict[str, Any] | None:
         return serialize_row(dict(row))
 
 
-async def load_event_requirements_with_counts(event_id: str) -> list[dict[str, Any]]:
+async def load_event_requirements_with_counts(
+    event_id: str, conn=None
+) -> list[dict[str, Any]]:
+    """Requirements plus a live selected/missing count.
+
+    Step 24C-D-8A: accepts an existing connection so the event-detail path can
+    reuse the caller's connection instead of acquiring a second one from the
+    pool. Passing `conn=None` keeps the standalone behaviour for other callers.
+    """
+    if conn is not None:
+        return await _fetch_requirements_with_counts(conn, event_id)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch_requirements_with_counts(owned, event_id)
+
+
+async def _fetch_requirements_with_counts(conn, event_id: str) -> list[dict[str, Any]]:
+    rows = await conn.fetch(
+        """
+        SELECT er.id, er.event_id, er.role_name, er.quantity,
+               er.required_gender, er.minimum_experience, er.minimum_skill_level,
+               COUNT(es.server_id) AS selected
+        FROM event_requirements er
+        LEFT JOIN event_staff es ON er.event_id = es.event_id
+            AND es.role = er.role_name
+            AND es.assignment_status IN ('PROPOSED', 'CONFIRMED')
+        WHERE er.event_id = $1
+        GROUP BY er.id, er.role_name, er.quantity, er.required_gender,
+                 er.minimum_experience, er.minimum_skill_level
+        ORDER BY er.role_name, er.required_gender
+        """,
+        event_id,
+    )
+    result = []
+    for r in rows:
+        row = serialize_row(dict(r))
+        row["missing"] = row["quantity"] - (row["selected"] or 0)
+        result.append(row)
+    return result
+
+
+async def load_event_requirements(
+    event_id: str,
+) -> list[dict[str, Any]] | None:
+    """Requirements only, for GET /events/{event_id}/requirements.
+
+    Step 24C-D-8A. This deliberately does NOT load staff, conflicts or transport:
+    that endpoint only needs requirements, and previously paid the entire
+    event-detail query path to throw it away.
+
+    Returns None when the event does not exist, so the caller can keep returning
+    404 exactly as before.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT 1 FROM events WHERE id = $1", event_id
+        )
+        if not exists:
+            return None
+        rows = await _fetch_requirements_with_counts(conn, event_id)
+        # Same rename the event-detail envelope applies, so the requirements
+        # response contract is unchanged by this refactor.
+        return [{**r, "requirement_id": r.pop("id")} for r in rows]
+
+
+async def load_actual_skill_levels(
+    server_ids: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Actual per-server skill levels, keyed by server_id.
+
+    Step 24C-D-8A internal capability. This reads `server_skills` -- the server's
+    REAL levels -- which is deliberately distinct from a requirement's
+    `minimum_skill_level`.
+
+    No skill identity is invented: `event_requirements` has no skill_id, so this
+    returns each server's skills as recorded (name, level, years) and leaves the
+    choice of which one answers a given role to the caller.
+
+    Returns an empty dict for an empty input so callers need no special case.
+    """
+    if not server_ids:
+        return {}
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT er.id, er.event_id, er.role_name, er.quantity,
-                   er.required_gender, er.minimum_experience, er.minimum_skill_level,
-                   COUNT(es.server_id) AS selected
-            FROM event_requirements er
-            LEFT JOIN event_staff es ON er.event_id = es.event_id
-                AND es.role = er.role_name
-                AND es.assignment_status IN ('PROPOSED', 'CONFIRMED')
-            WHERE er.event_id = $1
-            GROUP BY er.id, er.role_name, er.quantity, er.required_gender,
-                     er.minimum_experience, er.minimum_skill_level
-            ORDER BY er.role_name, er.required_gender
+            SELECT ss.server_id, sk.name AS skill_name, ss.level,
+                   ss.years_experience
+            FROM server_skills ss
+            JOIN skills sk ON sk.id = ss.skill_id
+            WHERE ss.server_id = ANY($1::uuid[])
+            ORDER BY ss.level DESC, sk.name ASC
             """,
-            event_id,
+            server_ids,
         )
-        result = []
-        for r in rows:
-            row = serialize_row(dict(r))
-            row["missing"] = row["quantity"] - (row["selected"] or 0)
-            result.append(row)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        grouped.setdefault(str(r["server_id"]), []).append(
+            {
+                "skill_name": r["skill_name"],
+                "level": int(r["level"]),
+                "years_experience": int(r["years_experience"]),
+            }
+        )
+    return grouped
+
+
+async def load_event_staff_assignments(event_id: str, conn=None) -> list[dict[str, Any]]:
+    """Assignments for an event, one row per assignment.
+
+    Step 24C-D-8A fixes two problems here:
+
+    * The availability window was joined with a plain LEFT JOIN, so a server with
+      several windows covering the event produced several rows for ONE
+      assignment. It is now a LATERAL subquery with LIMIT 1, which yields the same
+      status value but cannot multiply rows.
+    * Conflict detection used to cost one or two queries per server. It now runs
+      as a single bulk query over all assigned servers.
+
+    Accepts an existing connection to avoid a nested pool acquisition.
+    """
+    if conn is not None:
+        return await _fetch_staff_assignments(conn, event_id)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch_staff_assignments(owned, event_id)
+
+
+async def _fetch_staff_assignments(conn, event_id: str) -> list[dict[str, Any]]:
+    event_row = await conn.fetchrow(
+        "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
+        event_id,
+    )
+    if not event_row:
+        return []
+
+    event_start = _normalize_datetime(event_row["start_datetime"])
+    event_end = _normalize_datetime(event_row["end_datetime"])
+    if event_start is None or event_end is None:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT es.id, es.server_id, s.first_name, s.last_name, s.gender,
+               c.name AS city, es.role, es.assignment_status,
+               sp.speed_score, sp.punctuality_score, sp.presentation_score,
+               sp.communication_score, sp.teamwork_score, sp.discipline_score,
+               sp.endurance_score, s.years_experience,
+               -- LATERAL ... LIMIT 1 returns at most ONE row per assignment, so
+               -- several overlapping windows can no longer duplicate a server.
+               -- An AVAILABLE window is preferred, matching the old intent where
+               -- a covering AVAILABLE window drove the status.
+               ov.status AS availability_status
+        FROM event_staff es
+        JOIN servers s ON es.server_id = s.id
+        JOIN cities c ON s.city_id = c.id
+        LEFT JOIN server_profile sp ON s.id = sp.server_id
+        LEFT JOIN LATERAL (
+            SELECT sa.status
+            FROM server_availability sa
+            WHERE sa.server_id = s.id
+              AND sa.start_datetime <= $2
+              AND sa.end_datetime >= $3
+            ORDER BY (sa.status = 'AVAILABLE') DESC, sa.start_datetime ASC
+            LIMIT 1
+        ) ov ON TRUE
+        WHERE es.event_id = $1
+        ORDER BY es.assigned_at ASC
+        """,
+        event_id,
+        event_start,
+        event_end,
+    )
+    result = [serialize_row(dict(r)) for r in rows]
+
+    if not result:
         return result
 
-
-async def load_event_staff_assignments(event_id: str) -> list[dict[str, Any]]:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        event_row = await conn.fetchrow(
-            "SELECT start_datetime, end_datetime FROM events WHERE id = $1",
-            event_id,
-        )
-        if not event_row:
-            return []
-
-        event_start = _normalize_datetime(event_row["start_datetime"])
-        event_end = _normalize_datetime(event_row["end_datetime"])
-        if event_start is None or event_end is None:
-            return []
-        rows = await conn.fetch(
-            """
-            SELECT es.id, es.server_id, s.first_name, s.last_name, s.gender,
-                   c.name AS city, es.role, es.assignment_status,
-                   sp.speed_score, sp.punctuality_score, sp.presentation_score,
-                   sp.communication_score, sp.teamwork_score, sp.discipline_score,
-                   sp.endurance_score, s.years_experience,
-                   sa.status AS availability_status
-            FROM event_staff es
-            JOIN servers s ON es.server_id = s.id
-            JOIN cities c ON s.city_id = c.id
-            LEFT JOIN server_profile sp ON s.id = sp.server_id
-            LEFT JOIN server_availability sa ON s.id = sa.server_id
-                AND sa.start_datetime <= $2
-                AND sa.end_datetime >= $3
-            WHERE es.event_id = $1
-            ORDER BY es.assigned_at ASC
-            """,
-            event_id,
-            event_start,
-            event_end,
-        )
-        result = []
-        for r in rows:
-            item = serialize_row(dict(r))
-            item.update(
-                await get_event_scheduling_conflict(
-                    conn,
-                    str(r["server_id"]),
-                    event_start,
-                    event_end,
-                    event_id,
-                )
+    # One bulk query for every assigned server instead of one per server.
+    conflicts = await load_event_scheduling_conflicts(
+        conn,
+        [str(r["server_id"]) for r in rows],
+        event_start,
+        event_end,
+        event_id,
+    )
+    for item in result:
+        item.update(
+            conflicts.get(
+                str(item["server_id"]),
+                {"conflict": False, "conflict_reason": None},
             )
-            result.append(item)
-        return result
+        )
+    return result
 
 
 async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
@@ -156,8 +274,8 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
         event["city_latitude"] = city_row["latitude"] if city_row else None
         event["city_longitude"] = city_row["longitude"] if city_row else None
 
-        requirements = await load_event_requirements_with_counts(event_id)
-        assignments_raw = await load_event_staff_assignments(event_id)
+        requirements = await load_event_requirements_with_counts(event_id, conn=conn)
+        assignments_raw = await load_event_staff_assignments(event_id, conn=conn)
 
         total_requested = sum(r["quantity"] for r in requirements)
         total_selected = sum(r["selected"] or 0 for r in requirements)
@@ -260,28 +378,38 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
             event_id,
         )
 
-        transport_groups = []
-        for tg in transport_groups_raw:
-            # Step 24C-D-4: the pickup coordinates persisted at confirmation time
-            # are used to recompute the ordered itinerary distance. They are
-            # used only for this aggregation and are never returned.
+        # Step 24C-D-8A: ONE query for every group, using the repository's
+        # established `= ANY($1::uuid[])` bulk pattern -- the same approach
+        # get_event_operations() already uses below. This replaces a query per
+        # transport group. Pickup coordinates stay internal: they are read only to
+        # build the itinerary and are never returned.
+        passengers_by_group: dict[str, list[dict[str, Any]]] = {}
+        group_ids = [str(tg["id"]) for tg in transport_groups_raw]
+        if group_ids:
             passengers_raw = await conn.fetch(
                 """
-                SELECT tp.server_id, tp.pickup_order, tp.pickup_status,
-                       tp.pickup_latitude, tp.pickup_longitude,
+                SELECT tp.transport_group_id, tp.server_id, tp.pickup_order,
+                       tp.pickup_status, tp.pickup_latitude, tp.pickup_longitude,
                        s.first_name, s.last_name
                 FROM transport_passengers tp
                 JOIN servers s ON tp.server_id = s.id
-                WHERE tp.transport_group_id = $1
+                WHERE tp.transport_group_id = ANY($1::uuid[])
                 ORDER BY tp.pickup_order ASC
                 """,
-                tg["id"],
+                group_ids,
             )
+            for p in passengers_raw:
+                passengers_by_group.setdefault(
+                    str(p["transport_group_id"]), []
+                ).append(p)
+
+        transport_groups = []
+        for tg in transport_groups_raw:
             passengers = []
             itinerary: list[tuple[float, float]] = [
                 (float(tg["departure_latitude"]), float(tg["departure_longitude"]))
             ]
-            for p in passengers_raw:
+            for p in passengers_by_group.get(str(tg["id"]), []):
                 passengers.append({
                     "server_id": str(p["server_id"]),
                     "name": f"{p['first_name']} {p['last_name']}".strip(),
@@ -2229,8 +2357,8 @@ async def get_event_operations(event_id: str) -> dict[str, Any]:
             except Exception:
                 duration_minutes = None
 
-        requirements = await load_event_requirements_with_counts(event_id)
-        assignments_raw = await load_event_staff_assignments(event_id)
+        requirements = await load_event_requirements_with_counts(event_id, conn=conn)
+        assignments_raw = await load_event_staff_assignments(event_id, conn=conn)
 
         total_requested = sum(r["quantity"] for r in requirements)
         total_assigned = sum(r["selected"] or 0 for r in requirements)
