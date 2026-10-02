@@ -23,6 +23,7 @@ from app.models.events import (
     EventListItem,
     EventListResponse,
     EventOperationsResponse,
+    EventPrintDataResponse,
     EventRequirementDetailResponse,
     EventRequirementsResponse,
     EventStaffListResponse,
@@ -60,6 +61,7 @@ from app.services.event_service import (
     delete_requirement,
     get_eligible_staff,
     get_event_operations,
+    get_event_print_data,
     get_event_staff_summary,
     load_cities,
     load_event_list,
@@ -306,6 +308,18 @@ async def get_event_detail(event_id: str) -> EventDetailResponse:
     data = await get_event_staff_summary(event_id)
     if "error" in data:
         raise HTTPException(status_code=404, detail=data["error"])
+    return data
+
+
+@router.get("/events/{event_id}/print-data", response_model=EventPrintDataResponse, dependencies=[Depends(get_current_user_dep)])
+async def get_event_print_data_endpoint(event_id: str) -> EventPrintDataResponse:
+    # Step 24C-D-8B: backend data contract for the future print sheet.
+    # Read access matches GET /events/{event_id} exactly -- any authenticated
+    # user, not ADMIN-only -- because the sheet is a read-only view of data the
+    # event detail endpoint already returns to the same audience.
+    data = await get_event_print_data(event_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Event not found")
     return data
 
 

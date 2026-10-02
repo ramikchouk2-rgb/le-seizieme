@@ -7,6 +7,7 @@ import ServerForm from '@/app/components/servers/ServerForm';
 import { useServer } from '@/app/lib/hooks';
 import { useAnnouncer } from '@/app/components/ui/Announcer';
 import { Spinner } from '@/app/lib/loading';
+import { ServerUniformSize } from '@/app/lib/api';
 
 export default function EditServerPage() {
   const params = useParams();
@@ -26,6 +27,7 @@ export default function EditServerPage() {
     city_id: string;
     years_experience: number;
     worker_type?: string;
+    uniform_size?: ServerUniformSize | null;
     speed_score?: number;
     punctuality_score?: number;
     presentation_score?: number;
@@ -48,6 +50,7 @@ export default function EditServerPage() {
         city_id: data.city_id,
         years_experience: data.years_experience,
         worker_type: data.worker_type,
+        uniform_size: data.uniform_size ?? null,
         speed_score: data.speed_score,
         punctuality_score: data.punctuality_score,
         presentation_score: data.presentation_score,

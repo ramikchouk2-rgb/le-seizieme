@@ -36,6 +36,7 @@ export type {
   ServerProfile,
   ServerResponse,
   ServerStats,
+  ServerUniformSize,
   ServerUpdateRequest,
   WorkerType,
   EventDetailData,
@@ -53,6 +54,8 @@ export type {
 export type { LoginResponse, UserResponse } from '@/app/lib/api-client';
 export { ApiError } from '@/app/lib/api-client';
 export { login, getCurrentUser, logout } from '@/app/lib/api-client';
+/** Step 24C-D-9: the selectable uniform sizes, smallest to largest. */
+export { UNIFORM_SIZE_OPTIONS } from '@/app/lib/types';
 
 export interface EventListParams {
   search?: string;

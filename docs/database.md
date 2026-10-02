@@ -57,11 +57,31 @@ Serveurs événementiels.
 | city_id | UUID | Ville de rattachement (FK cities) |
 | years_experience | INTEGER | Années d'expérience |
 | is_active | BOOLEAN | Compte actif |
+| uniform_size | server_uniform_size | Taille de tenue, **nullable** (étape 24C-D-9) |
 | profile_photo | TEXT | **Hérité, inutilisé.** Conservé pour compatibilité ; voir `server_files` |
 | created_at | TIMESTAMP | Date de création |
 | updated_at | TIMESTAMP | Date de modification |
 
 **IMPORTANT** : L'adresse exacte du domicile n'est pas stockée dans cette table.
+
+#### uniform_size (étape 24C-D-9)
+
+Énumération `server_uniform_size` : `XS`, `S`, `M`, `L`, `XL`, `XXL`, `XXXL`
+(déclarée du plus petit au plus grand, l'ordre de l'énumération est donc
+utilisable comme ordre de tri).
+
+| Point | Choix |
+|-------|-------|
+| NULLABLE | Oui, **sans DEFAULT**. Les serveurs existants n'ont pas de taille relevée ; une valeur par défaut affirmerait une taille que personne n'a mesurée, et la rendrait indiscernable d'une mesure réelle. `NULL` = « non renseignée ». |
+| Type | Énumération PostgreSQL, pas du texte libre. `L`, `l`, `GRAND` et `L ` ne peuvent pas coexister pour la même taille, et une valeur hors liste est refusée par la base autant que par l'API. |
+| Portée | Donnée opérationnelle : exposed dans l'authentification de gestion des serveurs (détail, liste, création, mise à jour) et dans `assignments[].uniform_size` du contrat d'impression d'un événement. |
+| Mise à jour | `PATCH /api/servers/{id}` avec `uniform_size: null` **efface** la valeur ; omettre la clé la laisse intacte. Les autres champs conservent leur sémantique existante (« null = absent »). |
+
+Aucune clé étrangère : la taille est une propriété de la personne, pas une
+référence à un catalogue d'uniformes.
+
+Migration : `database/migrations/20261004_server_uniform_size.sql` (idempotente).
+À appliquer **avant** le code qui lit ou écrit `servers.uniform_size`.
 
 ### server_files
 Fichiers binaires rattachés à un serveur (photos de profil **et** documents
@@ -347,6 +367,20 @@ Besoins en personnel d'un événement.
 | created_at | TIMESTAMP | Date de création |
 
 **Flexibilité** : Les exigences sont paramétrables, pas codées en dur.
+
+**`event_requirements` n'a pas de `skill_id`** (étape 24C-D-8B). `minimum_skill_level`
+est donc un seuil numérique nu : aucune identité de compétence ne peut lui être
+rattachée, et aucune n'est déduite de `role_name`. C'est la raison pour laquelle
+`GET /api/events/{event_id}/print-data` expose ce seuil sous le nom explicite
+`required_minimum_skill_level`, distinct des compétences réelles d'un serveur, qui
+proviennent de `server_skills` et sont exposées sous `actual_skills`. Le champ
+historique `assignments[].skill_level` du détail d'événement conserve son sens
+d'origine (le minimum de l'exigence) et n'est pas renommé.
+
+Aucune table n'est ajoutée ou modifiée par l'étape 24C-D-8B : le contrat
+d'impression ne fait que lire `events`, `cities`, `event_requirements`,
+`event_staff`, `servers`, `server_skills`, `skills`, `server_files`,
+`server_attestations`, `transport_groups`, `transport_passengers` et `vehicles`.
 
 ### event_staff
 Affectations de serveurs aux événements.

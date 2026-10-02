@@ -13,6 +13,33 @@ export interface ServerFilters {
   sort_order: 'asc' | 'desc';
 }
 
+/**
+ * Step 24C-D-9: the uniform size a server wears.
+ *
+ * Mirrors the PostgreSQL enum `server_uniform_size`. Nullable everywhere: null
+ * means the size was never recorded, which is distinct from any listed size and
+ * is displayed as "Non renseignée" rather than defaulted.
+ */
+export type ServerUniformSize =
+  | 'XS'
+  | 'S'
+  | 'M'
+  | 'L'
+  | 'XL'
+  | 'XXL'
+  | 'XXXL';
+
+/** Selectable options. An empty value means "not recorded" and maps to null. */
+export const UNIFORM_SIZE_OPTIONS: ServerUniformSize[] = [
+  'XS',
+  'S',
+  'M',
+  'L',
+  'XL',
+  'XXL',
+  'XXXL',
+];
+
 export interface ServerListItem {
   id: string;
   first_name: string;
@@ -34,6 +61,8 @@ export interface ServerListItem {
   rank: number;
   /** Step 24C-D-5: boolean projection only, never image bytes. */
   has_profile_photo?: boolean;
+  /** Step 24C-D-9. Not shown as a column in the directory table. */
+  uniform_size?: ServerUniformSize | null;
 }
 
 export interface ServerListResponse {
@@ -53,6 +82,11 @@ export interface ServerProfile {
   city_id: string;
   years_experience: number;
   worker_type: string;
+  /**
+   * Step 24C-D-9. Null means the uniform size was never recorded; the UI shows
+   * "Non renseignée" instead of assuming one.
+   */
+  uniform_size?: ServerUniformSize | null;
   availability_status: string;
   email: string;
   phone: string;
@@ -277,6 +311,8 @@ export interface ServerCreateRequest {
   city_id: string;
   years_experience?: number;
   worker_type?: string;
+  /** Step 24C-D-9. Omit or send null for "not recorded". */
+  uniform_size?: ServerUniformSize | null;
   speed_score?: number;
   punctuality_score?: number;
   presentation_score?: number;
@@ -295,6 +331,11 @@ export interface ServerUpdateRequest {
   city_id?: string;
   years_experience?: number;
   worker_type?: string;
+  /**
+   * Step 24C-D-9. An explicit `null` CLEARS a recorded size; omitting the key
+   * leaves the stored value untouched.
+   */
+  uniform_size?: ServerUniformSize | null;
   speed_score?: number;
   punctuality_score?: number;
   presentation_score?: number;
@@ -315,6 +356,8 @@ export interface ServerResponse {
   city_id: string;
   years_experience: number;
   worker_type?: string;
+  /** Step 24C-D-9. Null when the size was never recorded. */
+  uniform_size?: ServerUniformSize | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;

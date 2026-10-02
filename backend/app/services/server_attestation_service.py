@@ -323,6 +323,65 @@ async def verified_qualification_counts(
     return {sid: counts.get(sid, 0) for sid in server_ids}
 
 
+async def load_verified_attestations(
+    server_ids: list[str], conn=None
+) -> dict[str, list[dict[str, Any]]]:
+    """Batched VERIFIED attestation metadata, keyed by server_id.
+
+    Step 24C-D-8B. The print-data contract needs the qualification metadata of
+    every assigned server, which `verified_qualification_counts` cannot provide
+    (it returns counts only). This is the same bulk shape as that helper: one
+    query for any number of servers, using `= ANY($1::uuid[])`, so a report
+    listing fifty servers never issues fifty queries.
+
+    Only VERIFIED rows are returned. PENDING, REJECTED and SUPERSEDED are all
+    excluded: a document that is not a verified qualification must never be
+    presented as one on a print sheet.
+
+    Metadata only, never document bytes, storage paths or private URLs. The
+    document itself is reachable only through the authenticated file endpoint.
+
+    `conn` lets a caller reuse its own connection instead of acquiring a second
+    one from the pool; omitting it keeps standalone behaviour for other callers.
+    """
+    if not server_ids:
+        return {}
+
+    async def _fetch(active_conn) -> dict[str, list[dict[str, Any]]]:
+        rows = await active_conn.fetch(
+            """
+            SELECT id, server_id, qualification_name, status, verified_at
+            FROM server_attestations
+            WHERE server_id = ANY($1::uuid[])
+              AND status = $2
+            ORDER BY qualification_name ASC, verified_at ASC
+            """,
+            server_ids,
+            STATUS_VERIFIED,
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            grouped.setdefault(str(r["server_id"]), []).append(
+                {
+                    "attestation_id": str(r["id"]),
+                    "qualification_name": r["qualification_name"],
+                    # Pinned rather than copied: a VERIFIED filter means anything
+                    # else reaching the client is a bug, not a value to display.
+                    "status": STATUS_VERIFIED,
+                    "verified_at": r["verified_at"].isoformat()
+                    if r["verified_at"] is not None
+                    else None,
+                }
+            )
+        return grouped
+
+    if conn is not None:
+        return await _fetch(conn)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch(owned)
+
+
 async def _apply_transition(
     server_id: str,
     attestation_id: str,

@@ -33,6 +33,9 @@ CREATE TYPE user_role AS ENUM ('ADMIN', 'MANAGER', 'STAFF');
 CREATE TYPE attendance_status AS ENUM ('EXPECTED', 'PRESENT', 'LATE', 'ABSENT', 'EXCUSED', 'LEFT');
 CREATE TYPE server_file_type AS ENUM ('PROFILE_PHOTO', 'ATTESTATION');
 CREATE TYPE attestation_status AS ENUM ('PENDING', 'VERIFIED', 'REJECTED', 'SUPERSEDED');
+-- Step 24C-D-9. Ordered smallest to largest so the enum's declaration order is
+-- itself a usable sort order.
+CREATE TYPE server_uniform_size AS ENUM ('XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL');
 
 
 -- ===================================================
@@ -87,6 +90,10 @@ CREATE TABLE servers (
     years_experience INTEGER NOT NULL CHECK (years_experience >= 0),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     profile_photo TEXT,
+    -- Step 24C-D-9. NULLABLE ON PURPOSE: existing servers have no measured
+    -- uniform size, and inventing a default would assert a size nobody recorded.
+    -- NULL means "non renseignée".
+    uniform_size server_uniform_size,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

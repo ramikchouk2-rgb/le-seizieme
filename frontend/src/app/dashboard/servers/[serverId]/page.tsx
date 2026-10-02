@@ -252,6 +252,14 @@ export default function ServerProfilePage() {
             <p className={SECTION}>Score mensuel</p>
             <p className="text-sm font-bold text-[#D4AF37]">{profile.points.current_month_points} pts</p>
           </div>
+          <div className="bg-gray-50 rounded-lg p-4">
+            <p className={SECTION}>Taille de tenue</p>
+            {/* Step 24C-D-9: the size is optional. A null means it was never
+                recorded, so it is labelled rather than replaced by a guess. */}
+            <p className="text-sm font-medium text-gray-900">
+              {profile.uniform_size || 'Non renseignée'}
+            </p>
+          </div>
         </div>
 
         <div className="mb-6">

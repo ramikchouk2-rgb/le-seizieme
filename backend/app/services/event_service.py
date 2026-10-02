@@ -16,6 +16,8 @@ from app.services.selection_engine import normalize_text, serialize_row
 from app.utils.selection_utils import route_distance_km
 from app.utils.event_utils import resolve_event_location
 from app.utils.selection_utils import haversine_km
+from app.services.server_attestation_service import load_verified_attestations
+from app.services.server_file_service import load_servers_with_profile_photo
 
 
 def _normalize_datetime(value: Any) -> datetime | None:
@@ -117,7 +119,7 @@ async def load_event_requirements(
 
 
 async def load_actual_skill_levels(
-    server_ids: list[str],
+    server_ids: list[str], conn=None
 ) -> dict[str, list[dict[str, Any]]]:
     """Actual per-server skill levels, keyed by server_id.
 
@@ -129,15 +131,20 @@ async def load_actual_skill_levels(
     returns each server's skills as recorded (name, level, years) and leaves the
     choice of which one answers a given role to the caller.
 
+    Step 24C-D-8B adds `skill_id` to each entry. It is the REAL identity of the
+    server's own skill record and is not a claim about which skill a requirement
+    refers to. `conn` lets a caller reuse its own connection rather than
+    acquiring a second one from the pool.
+
     Returns an empty dict for an empty input so callers need no special case.
     """
     if not server_ids:
         return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
+
+    async def _fetch(active_conn) -> dict[str, list[dict[str, Any]]]:
+        rows = await active_conn.fetch(
             """
-            SELECT ss.server_id, sk.name AS skill_name, ss.level,
+            SELECT ss.server_id, ss.skill_id, sk.name AS skill_name, ss.level,
                    ss.years_experience
             FROM server_skills ss
             JOIN skills sk ON sk.id = ss.skill_id
@@ -146,16 +153,23 @@ async def load_actual_skill_levels(
             """,
             server_ids,
         )
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for r in rows:
-        grouped.setdefault(str(r["server_id"]), []).append(
-            {
-                "skill_name": r["skill_name"],
-                "level": int(r["level"]),
-                "years_experience": int(r["years_experience"]),
-            }
-        )
-    return grouped
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            grouped.setdefault(str(r["server_id"]), []).append(
+                {
+                    "skill_id": str(r["skill_id"]),
+                    "skill_name": r["skill_name"],
+                    "level": int(r["level"]),
+                    "years_experience": int(r["years_experience"]),
+                }
+            )
+        return grouped
+
+    if conn is not None:
+        return await _fetch(conn)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch(owned)
 
 
 async def load_event_staff_assignments(event_id: str, conn=None) -> list[dict[str, Any]]:
@@ -477,6 +491,281 @@ async def get_event_staff_summary(event_id: str) -> dict[str, Any]:
                 "total_passengers": sum(g["passenger_count"] for g in transport_groups),
             },
         }
+
+
+# Assignments worth printing: a staff member who declined or was cancelled is
+# not part of the sheet, and neither is one already marked complete.
+PRINTABLE_ASSIGNMENT_STATUSES = ("PROPOSED", "CONFIRMED")
+
+
+async def get_event_print_data(event_id: str) -> dict[str, Any] | None:
+    """Everything the future event print sheet needs, in one flat contract.
+
+    Step 24C-D-8B. Deliberately separate from `get_event_staff_summary`: the
+    print contract names the required minimum and the server's actual skills
+    differently, so nothing here can be confused with the existing
+    `assignments[].skill_level` (which stays the requirement minimum and is left
+    exactly as it was).
+
+    Returns None when the event does not exist, matching the convention used by
+    the other event endpoints so the router can raise a plain 404.
+
+    Query shape is constant with respect to the number of assigned servers:
+    every per-server enrichment (actual skills, verified attestations, photo
+    presence) is ONE bulk `= ANY($1::uuid[])` statement for the whole event, and
+    transport passengers are fetched in one statement for all groups. A single
+    connection is threaded through, so no helper acquires a second one.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        event_row = await conn.fetchrow(
+            """
+            SELECT e.id, e.name, e.client_name, e.city_id, e.address,
+                   e.latitude, e.longitude, e.start_datetime, e.end_datetime,
+                   e.guest_count, e.event_type, e.priority, e.is_urgent,
+                   e.required_response_minutes, e.status, e.notes,
+                   c.name AS city_name, c.latitude AS city_latitude,
+                   c.longitude AS city_longitude
+            FROM events e
+            JOIN cities c ON e.city_id = c.id
+            WHERE e.id = $1
+            """,
+            event_id,
+        )
+        if not event_row:
+            return None
+
+        event = serialize_row(dict(event_row))
+        event_lat, event_lon, has_exact_location = resolve_event_location(event)
+        event_start = _normalize_datetime(event.get("start_datetime"))
+        event_end = _normalize_datetime(event.get("end_datetime"))
+
+        requirements_raw = await _fetch_requirements_with_counts(conn, event_id)
+        requirements = [
+            {
+                "requirement_id": str(r["id"]),
+                "role_name": r["role_name"],
+                "quantity": r["quantity"],
+                "required_gender": r.get("required_gender"),
+                "minimum_experience": r.get("minimum_experience") or 0,
+                # Named for what it is. `event_requirements` has no skill_id, so
+                # this stays a bare numeric threshold: no skill name is attached
+                # and none is inferred from role_name.
+                "required_minimum_skill_level": r["minimum_skill_level"],
+                "selected": r.get("selected") or 0,
+                "missing": r.get("missing") or 0,
+            }
+            for r in requirements_raw
+        ]
+        min_level_by_role = {r["role_name"]: r["minimum_skill_level"] for r in requirements_raw}
+
+        assignment_rows = await _fetch_print_assignments(conn, event_id)
+        server_ids = [str(r["server_id"]) for r in assignment_rows]
+
+        # Three bulk statements cover every assigned server, whatever the count.
+        skills_by_server = await load_actual_skill_levels(server_ids, conn=conn)
+        attestations_by_server = await load_verified_attestations(server_ids, conn=conn)
+        photo_by_server = await load_servers_with_profile_photo(server_ids, conn=conn)
+
+        assignments = []
+        for a in assignment_rows:
+            sid = str(a["server_id"])
+            assignments.append({
+                "server_id": sid,
+                "first_name": a["first_name"],
+                "last_name": a["last_name"],
+                "gender": a.get("gender"),
+                "city": a.get("city"),
+                "years_experience": a.get("years_experience") or 0,
+                "role": a["role"],
+                "assignment_status": a["assignment_status"],
+                # serialize_row has already rendered these timestamps as ISO
+                # strings, which is exactly the shape the response model takes.
+                "assigned_at": a.get("assigned_at"),
+                "confirmed_at": a.get("confirmed_at"),
+                # The requirement minimum, repeated per assignment so a printed
+                # row is self-contained. It is NOT the server's own level.
+                "required_minimum_skill_level": min_level_by_role.get(
+                    a["role"], a.get("minimum_skill_level") or 1
+                ),
+                # Not recomputed here. `compute_candidate_score` is a staffing
+                # concern and no score is persisted on the assignment, so the
+                # honest value is None rather than a number invented for print.
+                "score": None,
+                # Step 24C-D-9: operational data only. Nullable, and no other
+                # server field is pulled in for it.
+                "uniform_size": a.get("uniform_size"),
+                "profile_photo_available": photo_by_server.get(sid, False),
+                "actual_skills": skills_by_server.get(sid, []),
+                "verified_attestations": attestations_by_server.get(sid, []),
+            })
+
+        transport_groups = await _fetch_print_transport_groups(
+            conn, event_id, has_exact_location
+        )
+
+        return {
+            "event": {
+                "id": str(event["id"]),
+                "name": event["name"],
+                "client_name": event.get("client_name"),
+                "event_type": event.get("event_type"),
+                "start_datetime": event_start.isoformat() if event_start else None,
+                "end_datetime": event_end.isoformat() if event_end else None,
+                "city": event.get("city_name"),
+                "address": event.get("address"),
+                # The resolved VENUE position, never a server position.
+                "latitude": event_lat,
+                "longitude": event_lon,
+                "guest_count": event.get("guest_count"),
+                "status": event["status"],
+                "priority": event.get("priority"),
+                "urgent": bool(event.get("is_urgent")),
+                "required_response_minutes": event.get("required_response_minutes"),
+                "notes": event.get("notes"),
+                "has_exact_location": has_exact_location,
+            },
+            "requirements": requirements,
+            "assignments": assignments,
+            "transport_groups": transport_groups,
+        }
+
+
+async def _fetch_print_assignments(conn, event_id: str) -> list[dict[str, Any]]:
+    """Assigned servers for printing, one row per assignment.
+
+    The requirement minimum is selected with a LATERAL lookup on `role_name` so a
+    printed row can show the threshold it was assigned against. It is returned
+    separately from the actual skills precisely because it is a requirement and
+    not a capability; nothing in this function infers a skill identity from it.
+    """
+    return [
+        serialize_row(dict(r))
+        for r in await conn.fetch(
+            """
+            SELECT es.server_id, s.first_name, s.last_name, s.gender,
+                   c.name AS city, s.years_experience, es.role,
+                   es.assignment_status, es.assigned_at, es.confirmed_at,
+                   -- Step 24C-D-9. Cast to text so the print payload carries a
+                   -- plain size string; NULL stays NULL, meaning never recorded.
+                   s.uniform_size::text AS uniform_size,
+                   mr.minimum_skill_level
+            FROM event_staff es
+            JOIN servers s ON es.server_id = s.id
+            JOIN cities c ON s.city_id = c.id
+            LEFT JOIN LATERAL (
+                SELECT er.minimum_skill_level
+                FROM event_requirements er
+                WHERE er.event_id = es.event_id AND er.role_name = es.role
+                ORDER BY er.id
+                LIMIT 1
+            ) mr ON TRUE
+            WHERE es.event_id = $1
+              AND es.assignment_status = ANY($2::assignment_status[])
+            ORDER BY es.role ASC, s.first_name ASC, s.last_name ASC
+            """,
+            event_id,
+            list(PRINTABLE_ASSIGNMENT_STATUSES),
+        )
+    ]
+
+
+async def _fetch_print_transport_groups(
+    conn, event_id: str, has_exact_location: bool
+) -> list[dict[str, Any]]:
+    """Transport groups and their passengers, in two statements.
+
+    Passengers are fetched once for ALL groups using `= ANY($1::uuid[])`, the
+    bulk pattern established in Step 24C-D-8A. A per-group loop is deliberately
+    avoided: the statement count must not depend on the number of groups.
+
+    Pickup and route coordinates are read to compute the route distance and are
+    never returned. Only the human-readable labels are exposed; no driver or
+    passenger position travels to the client.
+    """
+    groups_raw = await conn.fetch(
+        """
+        SELECT tg.id, tg.driver_server_id, tg.departure_time,
+               tg.departure_location_label, tg.destination_label,
+               tg.departure_latitude, tg.departure_longitude,
+               tg.destination_latitude, tg.destination_longitude,
+               tg.estimated_distance_km, tg.estimated_duration_minutes,
+               tg.status::text AS status,
+               v.brand, v.model, v.vehicle_type::text AS vehicle_type,
+               v.seats_total, d.first_name, d.last_name
+        FROM transport_groups tg
+        JOIN vehicles v ON tg.vehicle_id = v.id
+        JOIN servers d ON tg.driver_server_id = d.id
+        WHERE tg.event_id = $1
+          AND tg.status <> 'CANCELLED'
+        ORDER BY tg.departure_time ASC, tg.created_at ASC
+        """,
+        event_id,
+    )
+    if not groups_raw:
+        return []
+
+    passengers_by_group: dict[str, list[dict[str, Any]]] = {}
+    for p in await conn.fetch(
+        """
+        SELECT tp.transport_group_id, tp.server_id, tp.pickup_order,
+               tp.pickup_status::text AS pickup_status,
+               tp.pickup_location_label, tp.pickup_latitude, tp.pickup_longitude,
+               s.first_name, s.last_name
+        FROM transport_passengers tp
+        JOIN servers s ON tp.server_id = s.id
+        WHERE tp.transport_group_id = ANY($1::uuid[])
+        ORDER BY tp.pickup_order ASC
+        """,
+        [str(tg["id"]) for tg in groups_raw],
+    ):
+        passengers_by_group.setdefault(str(p["transport_group_id"]), []).append(p)
+
+    result = []
+    for tg in groups_raw:
+        gid = str(tg["id"])
+        passengers = []
+        itinerary: list[tuple[float, float]] = [
+            (float(tg["departure_latitude"]), float(tg["departure_longitude"]))
+        ]
+        for p in passengers_by_group.get(gid, []):
+            passengers.append({
+                "server_id": str(p["server_id"]),
+                "name": f"{p['first_name']} {p['last_name']}".strip(),
+                "pickup_order": p["pickup_order"],
+                "pickup_status": p["pickup_status"],
+                "pickup_location_label": p["pickup_location_label"],
+            })
+            itinerary.append(
+                (float(p["pickup_latitude"]), float(p["pickup_longitude"]))
+            )
+        if tg["destination_latitude"] is not None and tg["destination_longitude"] is not None:
+            itinerary.append(
+                (float(tg["destination_latitude"]), float(tg["destination_longitude"]))
+            )
+        result.append({
+            "transport_group_id": gid,
+            "driver_server_id": str(tg["driver_server_id"]),
+            "driver_name": f"{tg['first_name']} {tg['last_name']}".strip(),
+            "vehicle": f"{tg['brand']} {tg['model']}",
+            "vehicle_type": tg["vehicle_type"],
+            "capacity": tg["seats_total"],
+            "passenger_count": len(passengers),
+            "departure_time": tg["departure_time"].isoformat()
+            if tg["departure_time"] is not None
+            else None,
+            "departure_location_label": tg["departure_location_label"],
+            "destination_label": tg["destination_label"],
+            "estimated_duration_minutes": tg["estimated_duration_minutes"],
+            "estimated_distance_km": float(tg["estimated_distance_km"])
+            if tg["estimated_distance_km"] is not None
+            else None,
+            "estimated_route_distance_km": round(route_distance_km(itinerary), 2),
+            "has_exact_location": has_exact_location,
+            "status": tg["status"],
+            "passengers": passengers,
+        })
+    return result
 
 
 async def confirm_staff_assignments(

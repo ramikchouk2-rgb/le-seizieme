@@ -1,6 +1,53 @@
+from enum import Enum
+
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime
+
+
+class ServerUniformSize(str, Enum):
+    """Step 24C-D-9: the clothing size a server wears.
+
+    Mirrors the PostgreSQL enum `server_uniform_size` exactly, so the value set
+    is closed on both sides of the wire. Declaring it as a `str` enum means the
+    API still speaks plain strings ("L") while an off-list value such as
+    "GRAND" or "l" is rejected during validation instead of being stored as
+    free text.
+
+    NULL is valid and means "not recorded". It is modelled as an optional field
+    rather than as a member of this enum, because "we do not know" is not a
+    size.
+    """
+
+    XS = "XS"
+    S = "S"
+    M = "M"
+    L = "L"
+    XL = "XL"
+    XXL = "XXL"
+    XXXL = "XXXL"
+
+
+# Mirrors the PostgreSQL enum `worker_type`. Step 24C-D-9A: an off-list value used
+# to reach `server_profile.worker_type` and surface as a raw PostgreSQL
+# InvalidTextRepresentationError, i.e. a 500. Validating against this set turns
+# that into the 422 the rest of the API already returns for an invalid enum-ish
+# field (see RequirementCreateRequest.required_gender).
+VALID_WORKER_TYPES = ("HARD_WORKER", "BALANCED", "SOFT_WORKER")
+
+# The default `create_server` has always intended: a server created without an
+# explicit worker type gets the balanced profile. NULL and "" both mean "not
+# specified", so both fall back.
+DEFAULT_WORKER_TYPE = "BALANCED"
+
+
+def validate_worker_type(value: str | None) -> str | None:
+    """Shared by ServerCreateRequest and ServerUpdateRequest."""
+    if value is None:
+        return None
+    if value not in VALID_WORKER_TYPES:
+        raise ValueError('Type de travailleur invalide.')
+    return value
 
 
 class ServerSkillResponse(BaseModel):
@@ -76,6 +123,10 @@ class ServerListItem(BaseModel):
     # SUPERSEDED do not count. Deliberately informational: this step does not
     # feed the staffing score.
     verified_attestation_count: int = 0
+    # Step 24C-D-9. The uniform size a server wears. Nullable, and deliberately
+    # NOT rendered as a column in the server directory: the list is already
+    # dense, so the field is available to the API without crowding the table.
+    uniform_size: Optional[ServerUniformSize] = None
 
 
 class ServerListResponse(BaseModel):
@@ -213,6 +264,10 @@ class ServerProfileResponse(BaseModel):
     profile_photo: Optional[ServerFileMetadataResponse] = None
     # Step 24C-D-6: aggregate of VERIFIED attestations. Not a score input.
     verified_attestation_count: int = 0
+    # Step 24C-D-9. The uniform size this server wears. Nullable: null means the
+    # size was never recorded and the UI must show "Non renseignée" rather than
+    # guess one.
+    uniform_size: Optional[ServerUniformSize] = None
 
 
 class ServerStatsResponse(BaseModel):
@@ -231,6 +286,8 @@ class ServerCreateRequest(BaseModel):
     city_id: str
     years_experience: int = 0
     worker_type: Optional[str] = None
+    # Step 24C-D-9. Optional and nullable: omitted or null means "not recorded".
+    uniform_size: Optional[ServerUniformSize] = None
     speed_score: int = 5
     punctuality_score: int = 5
     presentation_score: int = 5
@@ -238,6 +295,13 @@ class ServerCreateRequest(BaseModel):
     teamwork_score: int = 5
     discipline_score: int = 5
     endurance_score: int = 5
+
+    @field_validator('worker_type')
+    @classmethod
+    def worker_type_must_be_valid(cls, v):
+        # Step 24C-D-9A: reject an off-list value here rather than letting the
+        # database raise a 500. A null stays valid and is defaulted downstream.
+        return validate_worker_type(v)
 
 
 class ServerUpdateRequest(BaseModel):
@@ -249,6 +313,10 @@ class ServerUpdateRequest(BaseModel):
     city_id: Optional[str] = None
     years_experience: Optional[int] = None
     worker_type: Optional[str] = None
+    # Step 24C-D-9. An explicit null CLEARS the value; omitting the key leaves it
+    # untouched. That distinction comes from the router's
+    # `model_dump(exclude_unset=True)`, so the service can tell the two apart.
+    uniform_size: Optional[ServerUniformSize] = None
     speed_score: Optional[int] = None
     punctuality_score: Optional[int] = None
     presentation_score: Optional[int] = None
@@ -257,6 +325,14 @@ class ServerUpdateRequest(BaseModel):
     discipline_score: Optional[int] = None
     endurance_score: Optional[int] = None
     is_active: Optional[bool] = None
+
+    @field_validator('worker_type')
+    @classmethod
+    def worker_type_must_be_valid(cls, v):
+        # Step 24C-D-9A. On PATCH a null is ignored by the update loop -- an
+        # existing behaviour left untouched -- so this only refuses off-list
+        # values.
+        return validate_worker_type(v)
 
 
 class ServerResponse(BaseModel):
@@ -269,6 +345,8 @@ class ServerResponse(BaseModel):
     city_id: str
     years_experience: int
     worker_type: Optional[str]
+    # Step 24C-D-9. Null when the size was never recorded.
+    uniform_size: Optional[ServerUniformSize] = None
     is_active: bool
     created_at: str
     updated_at: str

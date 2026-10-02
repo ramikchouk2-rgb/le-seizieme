@@ -11,6 +11,7 @@ from app.services.server_file_service import (
     load_servers_with_profile_photo,
 )
 from app.services.server_attestation_service import verified_qualification_counts
+from app.models.servers import DEFAULT_WORKER_TYPE
 from app.utils.datetime_utils import now_naive_utc
 from fastapi import HTTPException
 
@@ -181,7 +182,11 @@ async def load_server_list(
                 v.model AS vehicle_model,
                 v.can_transport_coworkers AS vehicle_can_transport,
                 COALESCE(mr.total_points, 0) AS monthly_points,
-                mr.rank
+                mr.rank,
+                -- Step 24C-D-9. Cast to text for a plain string in JSON. This is
+                -- a presentation cast only; the stored value is still the enum,
+                -- so an invalid size can never be written.
+                s.uniform_size::text AS uniform_size
             FROM servers s
             JOIN cities c ON s.city_id = c.id
             LEFT JOIN server_profile sp ON s.id = sp.server_id
@@ -242,6 +247,11 @@ async def load_server_list(
                 "rank": r["rank"] or 0,
                 "has_profile_photo": photo_flags.get(server_id, False),
                 "verified_attestation_count": attestation_counts.get(server_id, 0),
+                # Step 24C-D-9. Selected as ::text so an enum comes back as a
+                # plain string, matching every other field here. No cast is
+                # applied to the value itself, so PostgreSQL still rejects an
+                # off-list size.
+                "uniform_size": r["uniform_size"],
             }
             if r["vehicle_id"]:
                 item["vehicle"] = {
@@ -262,6 +272,8 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             """
             SELECT s.id, s.first_name, s.last_name, s.gender, s.email, s.phone,
                    c.name AS city, s.years_experience,
+                   -- Step 24C-D-9: nullable, cast to text for a plain string.
+                   s.uniform_size::text AS uniform_size,
                    sp.worker_type,
                    CASE
                        WHEN sa.start_datetime <= $2 AND sa.end_datetime > $3 AND sa.status = 'AVAILABLE'
@@ -408,6 +420,9 @@ async def load_server_detail(server_id: str) -> dict[str, Any] | None:
             "city": server_row["city"],
             "years_experience": server_row["years_experience"],
             "worker_type": server_row["worker_type"] or "",
+            # Step 24C-D-9. None when the size was never recorded; the UI shows
+            # "Non renseignée" rather than defaulting to a size.
+            "uniform_size": server_row["uniform_size"],
             "availability_status": server_row["availability_status"],
             "email": server_row["email"],
             "phone": server_row["phone"],
@@ -526,11 +541,19 @@ async def create_server(data: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail="Un serveur avec cet email existe déjà.")
 
         # Create server
+        # Step 24C-D-9: uniform_size is passed through as a parameter, so the
+        # enum -- not string formatting -- is what constrains the value. An
+        # omitted or null uniform_size simply leaves the column NULL.
         row = await conn.fetchrow(
             """
-            INSERT INTO servers (first_name, last_name, email, phone, gender, city_id, years_experience)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at
+            INSERT INTO servers (
+                first_name, last_name, email, phone, gender, city_id,
+                years_experience, uniform_size
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::server_uniform_size)
+            RETURNING id, first_name, last_name, email, phone, gender, city_id,
+                      years_experience, uniform_size::text AS uniform_size,
+                      is_active, created_at, updated_at
             """,
             data["first_name"],
             data["last_name"],
@@ -539,18 +562,29 @@ async def create_server(data: dict[str, Any]) -> dict[str, Any]:
             data["gender"],
             data["city_id"],
             data.get("years_experience", 0),
+            data.get("uniform_size"),
         )
 
         server_id = row["id"]
 
-        # Create server_profile with worker type
-        worker_type = data.get("worker_type", "BALANCED")
-        await conn.execute(
+        # Create server_profile with worker type.
+        #
+        # Step 24C-D-9A, cause 3: `data.get("worker_type", "BALANCED")` never
+        # reached its default. `ServerCreateRequest.model_dump()` always emits
+        # the key, so an omitted worker_type arrived as an explicit None and
+        # `.get` returned that None instead of "BALANCED" -- which then violated
+        # server_profile.worker_type NOT NULL. `or` treats None and "" alike, so
+        # the intended fallback now actually applies.
+        worker_type = data.get("worker_type") or DEFAULT_WORKER_TYPE
+        # RETURNING the profile's own value means the response reports what was
+        # stored, not what was requested, with no extra round trip.
+        profile_row = await conn.fetchrow(
             """
             INSERT INTO server_profile (server_id, speed_score, punctuality_score, presentation_score,
                                         communication_score, teamwork_score, discipline_score,
                                         endurance_score, worker_type)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING worker_type::text AS worker_type
             """,
             server_id,
             data.get("speed_score", 5),
@@ -563,7 +597,41 @@ async def create_server(data: dict[str, Any]) -> dict[str, Any]:
             worker_type,
         )
 
-        return dict(row)
+        return _server_row_to_response(row, profile_row["worker_type"])
+
+
+def _server_row_to_response(
+    row: Any, worker_type: str | None
+) -> dict[str, Any]:
+    """Shape a `servers` row into the exact `ServerResponse` contract.
+
+    Step 24C-D-9A. `conn.fetchrow` yields a raw `Record`, so `id` and `city_id`
+    come back as `UUID` objects and `created_at`/`updated_at` as `datetime`.
+    `ServerResponse` declares all four as `str`, so returning the record as-is
+    raised a response-validation error and turned both endpoints into a 500.
+
+    Serialization is explicit here, matching how `load_server_detail` and
+    `load_server_list` already render these values elsewhere in this module, so
+    create/update/detail now agree on representation.
+
+    `worker_type` is passed in rather than selected, because it lives in
+    `server_profile`, not `servers`.
+    """
+    return {
+        "id": str(row["id"]),
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "email": row["email"],
+        "phone": row["phone"],
+        "gender": str(row["gender"]),
+        "city_id": str(row["city_id"]),
+        "years_experience": int(row["years_experience"]),
+        "worker_type": worker_type,
+        "uniform_size": row["uniform_size"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
 
 
 async def update_server(server_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -602,14 +670,27 @@ async def update_server(server_id: str, data: dict[str, Any]) -> dict[str, Any]:
                 server_values.append(data[field])
                 idx += 1
 
+        # Step 24C-D-9: uniform_size is handled separately from the loop above
+        # because it is the one servers-table field where an EXPLICIT null is
+        # meaningful -- it clears a recorded size.
+        #
+        # `model_dump(exclude_unset=True)` means the key is present only when the
+        # client sent it, so "omitted" (leave alone) and "sent as null" (clear)
+        # are distinguishable. The other fields keep their existing
+        # "null means absent" behaviour, which is deliberately not changed here.
+        if "uniform_size" in data:
+            server_updates.append(f"uniform_size = ${idx}::server_uniform_size")
+            server_values.append(data["uniform_size"])
+            idx += 1
+
         if server_updates:
             server_updates.append("updated_at = NOW()")
             server_values.append(server_id)
-            query = f"UPDATE servers SET {', '.join(server_updates)} WHERE id = ${idx} RETURNING id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at"
+            query = f"UPDATE servers SET {', '.join(server_updates)} WHERE id = ${idx} RETURNING id, first_name, last_name, email, phone, gender, city_id, years_experience, uniform_size::text AS uniform_size, is_active, created_at, updated_at"
             row = await conn.fetchrow(query, *server_values)
         else:
             row = await conn.fetchrow(
-                "SELECT id, first_name, last_name, email, phone, gender, city_id, years_experience, is_active, created_at, updated_at FROM servers WHERE id = $1",
+                "SELECT id, first_name, last_name, email, phone, gender, city_id, years_experience, uniform_size::text AS uniform_size, is_active, created_at, updated_at FROM servers WHERE id = $1",
                 server_id,
             )
 
@@ -639,7 +720,17 @@ async def update_server(server_id: str, data: dict[str, Any]) -> dict[str, Any]:
             query = f"UPDATE server_profile SET {', '.join(profile_updates)} WHERE server_id = $1"
             await conn.execute(query, *profile_values)
 
-        return dict(row)
+        # Step 24C-D-9A: read the profile's worker_type so the response always
+        # carries a value for a field `ServerResponse` requires. It is read after
+        # any profile update, so it reflects the stored value in every case:
+        # updated, untouched, or absent from the request entirely.
+        profile_row = await conn.fetchrow(
+            "SELECT worker_type::text AS worker_type FROM server_profile WHERE server_id = $1",
+            server_id,
+        )
+        worker_type = profile_row["worker_type"] if profile_row else None
+
+        return _server_row_to_response(row, worker_type)
 
 
 async def add_server_skill(server_id: str, data: dict[str, Any]) -> dict[str, Any]:

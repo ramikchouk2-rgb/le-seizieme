@@ -429,13 +429,22 @@ async def has_profile_photo(server_id: str) -> bool:
     return metadata is not None
 
 
-async def load_servers_with_profile_photo(server_ids: list[str]) -> dict[str, bool]:
-    """Batched boolean projection. Avoids an N+1 lookup on list endpoints."""
+async def load_servers_with_profile_photo(
+    server_ids: list[str], conn=None
+) -> dict[str, bool]:
+    """Batched boolean projection. Avoids an N+1 lookup on list endpoints.
+
+    A boolean only: no bytes, no path, no URL. Consumers that need the image
+    itself call the authenticated content endpoint for that one server.
+
+    Step 24C-D-8B: `conn` lets a report path reuse its own connection instead of
+    acquiring a second one from the pool.
+    """
     if not server_ids:
         return {}
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
+
+    async def _fetch(active_conn) -> dict[str, bool]:
+        rows = await active_conn.fetch(
             """
             SELECT DISTINCT server_id
             FROM server_files
@@ -446,8 +455,14 @@ async def load_servers_with_profile_photo(server_ids: list[str]) -> dict[str, bo
             server_ids,
             PROFILE_PHOTO_FILE_TYPE,
         )
-    with_photo = {str(r["server_id"]) for r in rows}
-    return {sid: sid in with_photo for sid in server_ids}
+        with_photo = {str(r["server_id"]) for r in rows}
+        return {sid: sid in with_photo for sid in server_ids}
+
+    if conn is not None:
+        return await _fetch(conn)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch(owned)
 
 
 async def get_current_profile_photo_content(server_id: str) -> dict[str, Any] | None:

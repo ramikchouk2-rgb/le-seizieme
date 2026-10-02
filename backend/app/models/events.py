@@ -415,3 +415,176 @@ class EventRequirementsResponse(BaseModel):
 
 class DeleteResponse(BaseModel):
     deleted: bool = True
+
+
+# ---------------------------------------------------------------- print data
+#
+# Step 24C-D-8B. An explicit, dedicated contract for the future print sheet,
+# kept separate from EventDetailResponse so the existing event-detail API is
+# untouched.
+#
+# The central distinction this contract makes is REQUIRED MINIMUM vs ACTUAL
+# SKILL. The existing event detail exposes `assignments[].skill_level`, which is
+# the requirement's minimum and is rendered in the UI as a per-server figure.
+# That field is left exactly as it is; here the two values get honest, separate
+# names so no consumer can confuse them again.
+
+
+class EventPrintEventResponse(BaseModel):
+    """Venue and event facts for the print sheet header.
+
+    `latitude`/`longitude` are the RESOLVED VENUE position (exact event
+    coordinates, else the city reference, else the global fallback) and
+    `has_exact_location` says which. Server GPS is never present at any level.
+    """
+
+    id: str
+    name: str
+    client_name: Optional[str] = None
+    event_type: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    city: Optional[str] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    guest_count: Optional[int] = None
+    status: str
+    priority: Optional[str] = None
+    urgent: bool = False
+    # Only the relative budget is exposed. No absolute deadline timestamp is
+    # computed here: the backend has no authoritative "response deadline"
+    # calculation for an event, and inventing a second one would create a
+    # competing source of truth.
+    required_response_minutes: Optional[int] = None
+    notes: Optional[str] = None
+    has_exact_location: bool = True
+
+
+class EventPrintRequirementResponse(BaseModel):
+    """One staffing requirement, with the minimum level named for what it is.
+
+    `event_requirements` has NO skill_id, so `required_minimum_skill_level` is a
+    bare numeric threshold. No skill name is attached to it and none is
+    inferred from `role_name`.
+    """
+
+    requirement_id: str
+    role_name: str
+    quantity: int
+    required_gender: Optional[str] = None
+    minimum_experience: int = 0
+    required_minimum_skill_level: int
+    selected: int = 0
+    missing: int = 0
+
+
+class EventPrintActualSkillResponse(BaseModel):
+    """A real `server_skills` record: the server's actual capability.
+
+    Distinct from EventPrintRequirementResponse.required_minimum_skill_level,
+    which is a requirement, not a capability.
+    """
+
+    skill_id: str
+    skill_name: str
+    level: int
+    years_experience: int
+
+
+class EventPrintVerifiedAttestationResponse(BaseModel):
+    """Qualification metadata only. Never bytes, a path or a URL.
+
+    `status` is always "VERIFIED": the service filters on it, so any other value
+    reaching a client would be a bug rather than a value to display.
+    """
+
+    attestation_id: str
+    qualification_name: str
+    status: str
+    verified_at: Optional[str] = None
+
+
+class EventPrintAssignmentResponse(BaseModel):
+    """One assigned server, for the staffing section of the sheet.
+
+    Deliberately absent: phone, email, the server's own coordinates, location
+    history, file URLs and any audit detail. `profile_photo_available` is a
+    boolean: the print page fetches the image through the existing
+    authenticated endpoint, one server at a time.
+    """
+
+    server_id: str
+    first_name: str
+    last_name: str
+    gender: Optional[str] = None
+    city: Optional[str] = None
+    years_experience: Optional[int] = None
+    role: str
+    assignment_status: str
+    assigned_at: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    # Step 24C-D-8B-FIX. The service has always built this per assignment, to
+    # make a printed row self-contained, but the field was never declared here,
+    # so FastAPI silently dropped it from the HTTP response while the
+    # service-level test still passed.
+    #
+    # Required, not optional: `event_requirements.minimum_skill_level` is
+    # NOT NULL, and the service's own fallback for an unmatched role is 1. The
+    # value is therefore always an int and null would mean a bug.
+    #
+    # A REQUIREMENT, not a capability -- compare `actual_skills` below.
+    required_minimum_skill_level: int
+    # Populated only from an already-persisted value. No score is recomputed
+    # here: selection scoring is a staffing concern, not a print concern.
+    score: Optional[float] = None
+    # Step 24C-D-9: the uniform size this server wears, so a sheet can show what
+    # is available. Nullable: null means never recorded, and the print page must
+    # label it rather than assume a default.
+    uniform_size: Optional[str] = None
+    profile_photo_available: bool = False
+    actual_skills: list[EventPrintActualSkillResponse] = []
+    verified_attestations: list[EventPrintVerifiedAttestationResponse] = []
+
+
+class EventPrintPassengerResponse(BaseModel):
+    server_id: str
+    name: str
+    pickup_order: int
+    pickup_status: str
+    pickup_location_label: str
+
+
+class EventPrintTransportGroupResponse(BaseModel):
+    """One confirmed transport group, for the logistics section.
+
+    Internal route coordinates are used to compute
+    `estimated_route_distance_km` and are never returned. Only human-readable
+    labels travel to the client.
+    """
+
+    transport_group_id: str
+    driver_server_id: str
+    driver_name: str
+    vehicle: str
+    vehicle_type: Optional[str] = None
+    capacity: int
+    passenger_count: int
+    departure_time: Optional[str] = None
+    departure_location_label: str
+    destination_label: str
+    estimated_duration_minutes: Optional[int] = None
+    estimated_distance_km: Optional[float] = None
+    estimated_route_distance_km: Optional[float] = None
+    has_exact_location: bool = True
+    status: str
+    passengers: list[EventPrintPassengerResponse] = []
+
+
+class EventPrintDataResponse(BaseModel):
+    """The full print-data contract for GET /events/{event_id}/print-data."""
+
+    event: EventPrintEventResponse
+    requirements: list[EventPrintRequirementResponse] = []
+    assignments: list[EventPrintAssignmentResponse] = []
+    transport_groups: list[EventPrintTransportGroupResponse] = []

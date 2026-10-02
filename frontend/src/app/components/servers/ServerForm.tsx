@@ -1,7 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { City, ServerCreateRequest, ServerUpdateRequest, createServer, updateServer, getCities } from '@/app/lib/api';
+import {
+  City,
+  ServerCreateRequest,
+  ServerUniformSize,
+  ServerUpdateRequest,
+  UNIFORM_SIZE_OPTIONS,
+  createServer,
+  updateServer,
+  getCities,
+} from '@/app/lib/api';
 
 interface ServerFormProps {
   mode: 'create' | 'edit';
@@ -14,6 +23,7 @@ interface ServerFormProps {
     city_id: string;
     years_experience: number;
     worker_type?: string;
+    uniform_size?: ServerUniformSize | null;
     speed_score?: number;
     punctuality_score?: number;
     presentation_score?: number;
@@ -37,6 +47,12 @@ const WORKER_TYPE_OPTIONS = [
   { value: 'HARD_WORKER', label: 'Profil performant' },
   { value: 'BALANCED', label: 'Profil équilibré' },
   { value: 'SOFT_WORKER', label: 'Profil souple' },
+];
+
+/** Step 24C-D-9. The empty option is a real choice: "not recorded" -> null. */
+const UNIFORM_SIZE_SELECT_OPTIONS: { value: ServerUniformSize | ''; label: string }[] = [
+  { value: '', label: 'Non renseignée' },
+  ...UNIFORM_SIZE_OPTIONS.map((size) => ({ value: size, label: size })),
 ];
 
 const SCORE_FIELDS = [
@@ -64,6 +80,8 @@ export default function ServerForm({ mode, initialData, onSuccess, onCancel }: S
     city_id: '',
     years_experience: 0,
     worker_type: 'BALANCED',
+    // Step 24C-D-9: null until a real size is chosen.
+    uniform_size: null,
     speed_score: 5,
     punctuality_score: 5,
     presentation_score: 5,
@@ -102,6 +120,8 @@ export default function ServerForm({ mode, initialData, onSuccess, onCancel }: S
         city_id: initialData.city_id || '',
         years_experience: initialData.years_experience || 0,
         worker_type: initialData.worker_type || 'BALANCED',
+        // A null stored size loads as the "Non renseignée" option.
+        uniform_size: initialData.uniform_size ?? null,
         speed_score: initialData.speed_score || 5,
         punctuality_score: initialData.punctuality_score || 5,
         presentation_score: initialData.presentation_score || 5,
@@ -146,6 +166,9 @@ export default function ServerForm({ mode, initialData, onSuccess, onCancel }: S
         city_id: form.city_id!,
         years_experience: form.years_experience!,
         worker_type: form.worker_type,
+        // Step 24C-D-9: the empty option becomes null, never "". The backend
+        // treats an explicit null as "clear this value".
+        uniform_size: form.uniform_size ?? null,
         speed_score: form.speed_score,
         punctuality_score: form.punctuality_score,
         presentation_score: form.presentation_score,
@@ -319,6 +342,25 @@ export default function ServerForm({ mode, initialData, onSuccess, onCancel }: S
             >
               <option value="true">Oui</option>
               <option value="false">Non</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="server-uniform-size" className="block text-sm font-medium text-gray-700 mb-1">Taille de tenue</label>
+            <select
+              id="server-uniform-size"
+              value={form.uniform_size ?? ''}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  // '' means "Non renseignée", which is null rather than "".
+                  uniform_size: (e.target.value || null) as ServerUniformSize | null,
+                })
+              }
+              className={inputClass}
+            >
+              {UNIFORM_SIZE_SELECT_OPTIONS.map((opt) => (
+                <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </div>
         </div>
