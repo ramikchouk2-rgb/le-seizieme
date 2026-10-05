@@ -32,6 +32,33 @@ class Settings(BaseSettings):
     # ceiling should stay modest.
     MAX_ATTESTATION_BYTES: int = 5 * 1024 * 1024
 
+    # Step 24C-D-11: server-side profile photo optimization targets.
+    #
+    # 512 px is derived from how photos are actually displayed, not guessed:
+    #   * Print sheet renders a photo at 22 x 27 mm, which is ~260 x 319 device
+    #     pixels at 300 DPI (see .print-photo-img in globals.css).
+    #   * The largest on-screen use is ServerPhoto size="xl" = 128 CSS px, i.e.
+    #     384 device pixels at 3x DPR.
+    # 512 px covers both with headroom while staying small enough to download N
+    # of them quickly over a phone connection.
+    #
+    # This is an OPTIMIZATION target, never an upload limit: the accepted upload
+    # size stays MAX_PROFILE_PHOTO_BYTES, and a photo already smaller than this
+    # is not enlarged.
+    PROFILE_PHOTO_MAX_DIMENSION: int = 512
+
+    # Quality 82 is the standard "visually lossless for photographs" point for
+    # JPEG. It is high enough that a professional staff photo printed at 22 mm
+    # shows no compression artefacts, and low enough to cut a typical 300 KB
+    # phone photo to a small fraction of that.
+    PROFILE_PHOTO_JPEG_QUALITY: int = 82
+
+    # Photos are re-encoded to JPEG because it is universally decodable, is the
+    # smallest sane choice for photographic content, and dropping the source
+    # metadata on write is trivial. "image/jpeg" is already permitted by the
+    # server_files mime allowlist check constraint.
+    PROFILE_PHOTO_OUTPUT_MIME_TYPE: str = "image/jpeg"
+
     PORT: int = 8000
 
     def validate_production(self) -> None:

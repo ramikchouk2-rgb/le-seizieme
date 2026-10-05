@@ -1,8 +1,19 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import ValidationError as PydanticValidationError
 
+from app.core.database import get_pool
 from app.core.deps import get_current_user_dep, require_manager_or_admin
 from app.models.attestations import (
     AttestationRejectRequest,
@@ -31,6 +42,7 @@ from app.models.servers import (
     ServerVehicleUpdateRequest,
     ServerResponse,
 )
+from app.services.image_optimizer import profile_photo_etag
 from app.services.server_file_service import (
     delete_current_profile_photo,
     get_current_profile_photo_content,
@@ -192,29 +204,71 @@ async def upload_profile_photo_endpoint(
     "/servers/{server_id}/files/profile-photo",
     dependencies=[Depends(require_manager_or_admin)],
 )
-async def get_profile_photo_endpoint(server_id: str) -> Response:
-    """Return the raw photo bytes to an authorized manager/admin.
+async def get_profile_photo_endpoint(server_id: str, request: Request) -> Response:
+    """Return the photo bytes to an authorized manager/admin.
 
-    This is the ONLY endpoint that returns BYTEA. The response is explicitly
-    marked private and uncacheable so a photo cannot be retained by an
-    intermediary cache. No public URL is generated or returned.
+    This is the ONLY endpoint that returns photo BYTEA. The response is
+    explicitly marked private so a photo cannot be retained by a shared cache
+    or intermediary. No public URL is generated or returned.
+
+    Step 24C-D-11, delivery: the bytes are the optimized representation produced
+    at upload time, so nothing about this response shape changed -- only its
+    size. A print sheet that used to pull a 2 MiB original now pulls the
+    downscaled, metadata-free version.
+
+    Step 24C-D-11, connections: the server-exists check and the photo lookup
+    share ONE pooled connection. Previously each helper acquired its own, so a
+    single photo request could occupy two pool slots for the life of the request.
+
+    Step 24C-D-11, caching: `private, no-cache` plus a content-derived strong
+    ETag. This is a conditional-request policy, not a relaxation of privacy:
+    `private` forbids any shared cache, and `no-cache` forces the browser to
+    revalidate with the server before every reuse, so the Authorization header
+    is still required every single time and an unauthorized client can never be
+    served from a cache. What it buys is that a reprint or a page reload sends
+    `If-None-Match` and receives a bodiless 304 instead of re-downloading N
+    photos. The previous `no-store` is deliberately not simply relaxed to
+    `max-age=<n>`: a heuristic freshness lifetime would let bytes be reused
+    without re-authorization.
     """
-    if not await server_exists(server_id):
-        raise HTTPException(status_code=404, detail="Serveur introuvable.")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if not await server_exists(server_id, conn=conn):
+            raise HTTPException(status_code=404, detail="Serveur introuvable.")
 
-    row = await get_current_profile_photo_content(server_id)
+        row = await get_current_profile_photo_content(server_id, conn=conn)
+
     if row is None:
         raise HTTPException(
             status_code=404, detail="Aucune photo de profil pour ce serveur."
         )
 
+    content = bytes(row["content"])
+    etag = profile_photo_etag(content)
+
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and any(
+        candidate.strip() in (etag, "*") for candidate in if_none_match.split(",")
+    ):
+        return Response(
+            status_code=304,
+            headers={
+                "Cache-Control": "private, no-cache",
+                "ETag": etag,
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     return Response(
-        content=bytes(row["content"]),
+        content=content,
         media_type=row["mime_type"],
         headers={
-            # Private per-server data: never store in a shared cache, and never
-            # let the browser treat it as a durable public asset.
-            "Cache-Control": "private, no-store, max-age=0",
+            # Private per-server data: a shared cache must never store it.
+            # `no-cache` (not `no-store`) allows the browser to KEEP the bytes
+            # but requires revalidation before every reuse, which is what makes
+            # the ETag conditional request above safe.
+            "Cache-Control": "private, no-cache",
+            "ETag": etag,
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": "inline",
         },

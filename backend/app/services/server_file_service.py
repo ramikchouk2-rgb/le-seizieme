@@ -29,6 +29,7 @@ from fastapi import HTTPException, status
 from app.core.database import get_pool
 from app.core.config import settings
 from app.services.audit_service import log_audit_action
+from app.services.image_optimizer import optimize_profile_photo, profile_photo_etag
 
 # Step 24C-D-7: audit actions for server-file administration. An upload that
 # replaces an existing photo is still PROFILE_PHOTO_UPLOADED; the difference is
@@ -246,12 +247,26 @@ def _metadata_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def server_exists(server_id: str) -> bool:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+async def server_exists(server_id: str, conn=None) -> bool:
+    """Whether a server id is known.
+
+    Step 24C-D-11: accepts an existing connection so a caller that must both
+    verify the server and read its photo can do so on ONE pooled connection
+    instead of acquiring the pool twice for a single request.
+    """
+
+    async def _check(active_conn) -> bool:
         return bool(
-            await conn.fetchval("SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)", server_id)
+            await active_conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM servers WHERE id = $1)", server_id
+            )
         )
+
+    if conn is not None:
+        return await _check(conn)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _check(owned)
 
 
 async def get_current_file_metadata(
@@ -276,29 +291,36 @@ async def get_current_file_metadata(
 
 
 async def get_current_file_content(
-    server_id: str, file_type: str
+    server_id: str, file_type: str, conn=None
 ) -> dict[str, Any] | None:
     """Bytes + MIME for the authorized retrieval endpoint of a given kind.
 
     Step 24C-D-6: for ATTESTATION files there may be several current files, so
     callers that need one specific document must pass an explicit file id. This
     helper exists for kinds with a single current file (profile photos).
+
+    Step 24C-D-11: `conn` lets the photo endpoint reuse the connection it already
+    holds for the server-exists check, so serving one photo costs ONE pool
+    acquisition instead of two. When omitted, a connection is acquired as before.
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id, server_id, file_type, mime_type, original_filename,
-                   file_size, is_current, created_at, content
-            FROM server_files
-            WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            server_id,
-            file_type,
-        )
+    query = """
+        SELECT id, server_id, file_type, mime_type, original_filename,
+               file_size, is_current, created_at, content
+        FROM server_files
+        WHERE server_id = $1 AND file_type = $2 AND is_current = TRUE
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+
+    async def _fetch(active_conn) -> dict[str, Any] | None:
+        row = await active_conn.fetchrow(query, server_id, file_type)
         return dict(row) if row else None
+
+    if conn is not None:
+        return await _fetch(conn)
+    pool = await get_pool()
+    async with pool.acquire() as owned:
+        return await _fetch(owned)
 
 
 async def get_file_content_by_id(
@@ -374,11 +396,26 @@ async def store_server_file(
 
     For kinds flagged ``single_current_per_server`` the previous current file is
     deactivated (never deleted) so history survives a replacement.
+
+    Step 24C-D-11: profile photos are optimized after validation and before they
+    are persisted. Validation deliberately runs FIRST and on the ORIGINAL bytes,
+    so the 2 MiB upload ceiling and the magic-byte allowlist still describe what
+    the client actually sent and no previously valid upload starts failing.
+    Only what gets stored shrinks. Attestation documents are NOT touched: they
+    are evidence, and must be preserved byte-for-byte as submitted.
     """
     mime_type = validate_file_content(data, declared_mime_type, file_type)
     safe_filename = sanitize_filename(original_filename)
-    file_size = len(data)
     kind = FILE_KINDS[file_type]
+
+    if file_type == PROFILE_PHOTO_FILE_TYPE:
+        optimized = optimize_profile_photo(data, mime_type)
+        data = optimized.data
+        mime_type = optimized.mime_type
+
+    # Measured on the bytes actually persisted, so the
+    # server_files_size_matches_content_check constraint always holds.
+    file_size = len(data)
 
     if kind["single_current_per_server"]:
         await conn.execute(
@@ -465,9 +502,15 @@ async def load_servers_with_profile_photo(
         return await _fetch(owned)
 
 
-async def get_current_profile_photo_content(server_id: str) -> dict[str, Any] | None:
-    """Bytes + MIME for the authorized photo endpoint only."""
-    return await get_current_file_content(server_id, PROFILE_PHOTO_FILE_TYPE)
+async def get_current_profile_photo_content(
+    server_id: str, conn=None
+) -> dict[str, Any] | None:
+    """Bytes + MIME for the authorized photo endpoint only.
+
+    Step 24C-D-11: pass `conn` to share the caller's connection with the
+    server-exists check, so one photo request touches the pool once.
+    """
+    return await get_current_file_content(server_id, PROFILE_PHOTO_FILE_TYPE, conn=conn)
 
 
 async def upload_profile_photo(

@@ -416,7 +416,13 @@ class TestPhotoLifecycle:
             assert r.status_code == 200, r.text
             assert r.content == png
             assert r.headers["content-type"] == "image/png"
-            assert "no-store" in r.headers["cache-control"]
+            # Step 24C-D-11 replaced `private, no-store, max-age=0` with a
+            # private conditional-request policy: the bytes may be kept by the
+            # browser but must be revalidated before any reuse, so the
+            # Authorization header is still required on every single request.
+            assert "private" in r.headers["cache-control"]
+            assert "public" not in r.headers["cache-control"]
+            assert "no-cache" in r.headers["cache-control"]
             assert r.headers["x-content-type-options"] == "nosniff"
         finally:
             await _cleanup([sid])

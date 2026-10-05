@@ -85,7 +85,7 @@ Migration : `database/migrations/20261004_server_uniform_size.sql` (idempotente)
 
 ### server_files
 Fichiers binaires rattachés à un serveur (photos de profil **et** documents
-d'attestation). **Étapes 24C-D-5 et 24C-D-6.**
+d'attestation). **Étapes 24C-D-5, 24C-D-6 et 24C-D-11.**
 
 | Colonne | Type | Description |
 |---------|------|-------------|
@@ -148,6 +148,85 @@ code ne la lit ni ne l'écrit. Elle n'est pas supprimée à cette étape et
 Migration : `database/migrations/20261001_server_files.sql` (idempotente).
 Étape 24C-D-6 : `database/migrations/20261002_server_attestations.sql`
 (idempotente).
+
+#### Optimisation des photos de profil — étape 24C-D-11
+
+L'audit en lecture seule de l'étape 24C-D-10 a montré que le chemin
+*métadonnées* de la fiche d'impression était déjà efficace, et qu'un
+`get_event_print_data()` exécutait 8 instructions SQL constantes sur une seule
+connexion, sans boucle par serveur. Il est resté intact.
+
+Le coût réel était la **livraison des images**. La fiche d'impression émet une
+requête authentifiée par serveur disposant d'une photo et attend la toutes avant
+d'imprimer ; chaque réponse transportait la photo à sa taille d'*upload* d'origine
+(jusqu'à 2 Mio). Cent serveurs sur un téléphone, c'étaient jusqu'à 200 Mio.
+
+La correction se fait donc à l'**écriture**, pas à la lecture : réduire une fois,
+stocker la version réduite, et livrer par l'existant un document qu'une fiche
+d'impression peut réellement utiliser.
+
+- **Aucune migration.** `PROFILE_PHOTO` contient la représentation optimisée, qui
+  fait autorité. Aucun consuming n'a besoin de l'original : la photo n'est rendue
+  qu'en vignette, et l'audit n'a trouvé aucun autre lecteur de pleine résolution.
+  La base ne contenait aucune photo courante. Il n'y a donc ni rétroportage, ni
+  colonne d'original, ni table de vignettes.
+- **512 px de côté maximal** (`PROFILE_PHOTO_MAX_DIMENSION`). La fiche imprime la
+  photo en 22 × 27 mm, soit environ 260 × 319 px à 300 DPI ; le plus grand usage
+  à l'écran est 128 px CSS, soit 384 px à 3×. 512 px couvre les deux avec une
+  marge de résolution, sans jamais agrandir : une image déjà plus petite est
+  conservée telle quelle.
+- **JPEG qualité 82** (`PROFILE_PHOTO_JPEG_QUALITY`), rapport d'aspect préservé
+  par une unique échelle de boîte englobante — pas de recadrage, pas de
+  déformation.
+- **Métadonnées supprimées.** Le ré-encodage ne transmet ni `exif`, ni
+  `icc_profile`, ni `xmp` : les tags GPS, numéros de série d'appareil, modèles
+  d'appareil et profils de couleur disparaissent. L'orientation EXIF est
+  appliquée aux pixels *avant* d'être abandonnée, pour qu'une photo de téléphone
+  prise en portrait ne soit pas stockée à l'envers. Une transparence est aplatie
+  sur fond blanc plutôt que rendue en noir.
+- **Jamais plus volumineux.** Si le ré-encodage ne réduit pas la taille, les
+  octets d'origine sont conservés. L'optimisation ne peut donc qu'abaisser le
+  payload et le stockage, jamais les augmenter.
+- **La validation passe en premier, sur les octets d'origine.** La liste blanche
+  de types et le plafond de 2 Mio décrivent donc toujours ce que le client a
+  réellement envoyé, et aucun upload valide ne peut devenir invalide du fait de
+  cette étape. `file_size` est ensuite mesuré sur les octets effectivement
+  persistés, ce qui préserve la contrainte `file_size = octet_length(content)`.
+- **Optimisation au mieux, jamais un motif de refus.** Si Pillow ne peut pas
+  décoder la charge utile — tronquée, exotique, ou une bombe de décompression
+  arrêtée par le garde-fou de Pillow lui-même, auquel cas les octets d'origine
+  sont conservés sans jamais être développés — le service stocke l'original.
+- **Les documents d'attestation ne sont jamais touchés.** Ce sont des preuves et
+  sont préservés octet pour octet ; seule la branche `PROFILE_PHOTO` est
+  optimisée.
+
+**Cache privé avec revalidation.** L'en-tête `Cache-Control` passe de
+`private, no-store, max-age=0` à `private, no-cache` : le navigateur peut
+conserver les octets, mais doit les revalider avant toute réutilisation. Le
+`ETag` est une empreinte SHA-256 tronquée à 128 bits **du contenu**, jamais de
+l'identifiant de ligne, donc rien d'interne ne fuite dans un en-tête renvoyé au
+client. Un `If-None-Match` correspondant produit un `304` sans corps. Cette
+politique ne contourne pas l'authentification : la dépendance d'autorisation
+s'exécute avant le gestionnaire de route, donc un `304` n'est jamais remis à un
+appelant non authentifié, et un rechargement ne dispense jamais du jeton.
+
+**Une seule connexion par requête photo.** Le point de terminaison réutilise la
+connexion qu'il détient déjà pour vérifier l'existence du serveur au lieu d'en
+acquérir une seconde, ramenant une requête photo de deux acquisitions à une.
+Les deux fonctions de service acceptent une connexion existante ; sans argument,
+elles en acquièrent une comme auparavant.
+
+**Endpoint groupé volontairement différé.** La correction est déjà atteignable
+sans lui. Une livraison groupée pour une fiche d'impression reste possible si la
+mesure le justifie un jour, mais elle n'est pas implémentée à cette étape.
+
+Mesures (Chromium, feuille d'impression de production, photos 2400 × 3200
+réelles) : 50 serveurs passent de 82,53 Mio à 5,19 Mo (facteur 15,9) et 100
+serveurs de 165,07 Mio à 10,39 Mo (facteur 15,9). Sur une connexion 4G
+profilée (9 Mbit/s, 170 ms), la fiche de 100 serveurs passe de 28,60 s à
+11,37 s. Le gabarit d'audit de l'étape D-10, rejoué tel quel, donne des temps
+identiques avant et après (28,47 s contre 28,60 s pour 100 serveurs), ce qui
+démontre l'absence de régression.
 
 ### server_attestations
 Attestations professionnelles d'un serveur. **Étape 24C-D-6.**
